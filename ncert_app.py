@@ -32,10 +32,10 @@ GROQ_MODEL      = "llama-3.1-8b-instant"
 CHUNK_SIZE      = 600
 CHUNK_OVERLAP   = 100
 
-# Google Drive ZIP file IDs
+# ── CORRECTED Google Drive ZIP IDs ────────────────────────────
 GDRIVE_FILES = {
-    "Maths.zip":          ("1ABT9Fu0Dmmi9AnhqECunbo9ehTt_5Lvk", "Mathematics"),
-    "Science.zip":        ("1EUcfrL8JeTz3zkuPHggxHj-dcCOrtgzN", "Science"),
+    "Math.zip":           ("1EUcfrL8JeTz3zkuPHggxHj-dcCOrtgzN", "Mathematics"),
+    "Science.zip":        ("1ABT9Fu0Dmmi9AnhqECunbo9ehTt_5Lvk", "Science"),
     "SocialScience1.zip": ("1VLSSrQxa9ljQjv2OZ5xjLM49jK5lh9bf", "History"),
     "SocialScience2.zip": ("1-hXrpg7sSmm3Cvf8QhQ4bIfOsVIkwJ7c", "Geography"),
     "SocialScience3.zip": ("1DI_r-mEgh3uFnAtqDzuztA46tSgNRjcX", "Civics"),
@@ -71,49 +71,37 @@ div[data-testid="stSelectbox"] label, label[data-testid="stWidgetLabel"] { color
 """, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
-# STEP 1 — DOWNLOAD ZIP FROM GOOGLE DRIVE USING GDOWN
+# DOWNLOAD FROM GOOGLE DRIVE
 # ════════════════════════════════════════════════════════════════
 
-def download_from_gdrive(file_id: str, dest_path: str, label: str) -> bool:
-    """
-    Download file from Google Drive using gdown.
-    gdown handles large file confirmation pages automatically.
-    """
+def download_from_gdrive(file_id: str, dest_path: str) -> bool:
     try:
         os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
         url = f"https://drive.google.com/uc?id={file_id}"
         gdown.download(url, dest_path, quiet=True, fuzzy=True)
-
-        # Verify file downloaded correctly
         if os.path.exists(dest_path) and os.path.getsize(dest_path) > 1000:
-            size_mb = os.path.getsize(dest_path) / (1024 * 1024)
             return True
-
-        # Try alternate URL format
         url2 = f"https://drive.google.com/file/d/{file_id}/view"
         gdown.download(url2, dest_path, quiet=True, fuzzy=True)
-
         if os.path.exists(dest_path) and os.path.getsize(dest_path) > 1000:
             return True
-
         return False
-
-    except Exception as e:
+    except Exception:
         return False
-
 
 # ════════════════════════════════════════════════════════════════
-# STEP 2 — EXTRACT ZIP
+# EXTRACT ZIP
+# Subject is taken from GDRIVE_FILES mapping — NOT from filename
+# This ensures correct subject tagging regardless of PDF names
 # ════════════════════════════════════════════════════════════════
 
 def extract_zip(zip_path: str, extract_to: str, subject: str) -> list:
-    """Extract ZIP and return list of (pdf_path, subject, filename)."""
     extracted = []
     try:
         with zipfile.ZipFile(zip_path, 'r') as z:
             for name in z.namelist():
                 clean_name = os.path.basename(name)
-                if not clean_name.lower().endswith(".pdf") or not clean_name:
+                if not clean_name.lower().endswith(".pdf"):
                     continue
                 if clean_name.startswith("__") or clean_name.startswith("."):
                     continue
@@ -122,15 +110,12 @@ def extract_zip(zip_path: str, extract_to: str, subject: str) -> list:
                 with z.open(name) as src, open(out_path, "wb") as dst:
                     dst.write(src.read())
                 extracted.append((out_path, subject, clean_name))
-    except zipfile.BadZipFile:
-        pass
     except Exception:
         pass
     return extracted
 
-
 # ════════════════════════════════════════════════════════════════
-# STEP 3 — PDF TEXT EXTRACTION
+# PDF TEXT EXTRACTION
 # ════════════════════════════════════════════════════════════════
 
 def clean_text(text: str) -> str:
@@ -173,9 +158,8 @@ def chunk_text(text: str) -> list:
         start += CHUNK_SIZE - CHUNK_OVERLAP
     return chunks
 
-
 # ════════════════════════════════════════════════════════════════
-# STEP 4 — INDEX INTO CHROMADB
+# INDEX INTO CHROMADB
 # ════════════════════════════════════════════════════════════════
 
 def index_pdfs(col, pdf_list: list, progress_bar, status_text) -> int:
@@ -184,7 +168,7 @@ def index_pdfs(col, pdf_list: list, progress_bar, status_text) -> int:
 
     for i, (pdf_path, subject, filename) in enumerate(pdf_list):
         chapter = os.path.splitext(filename)[0].upper()
-        status_text.text(f"📖 Indexing: {filename} ({i+1}/{total_pdfs})")
+        status_text.text(f"📖 Indexing: {filename} ({i+1}/{total_pdfs}) — {subject}")
         progress_bar.progress(int((i / max(total_pdfs, 1)) * 85) + 10)
 
         text, _ = extract_pdf_text(pdf_path)
@@ -203,7 +187,7 @@ def index_pdfs(col, pdf_list: list, progress_bar, status_text) -> int:
             metadatas = [
                 {
                     "source":  filename,
-                    "subject": subject,
+                    "subject": subject,   # from ZIP mapping — always correct
                     "chapter": chapter,
                     "page":    c["page"],
                     "class":   "Class 8",
@@ -218,16 +202,22 @@ def index_pdfs(col, pdf_list: list, progress_bar, status_text) -> int:
 
     return total_chunks
 
-
 # ════════════════════════════════════════════════════════════════
-# DATABASE SETUP
+# DATABASE SETUP — force delete old wrong index, start fresh
 # ════════════════════════════════════════════════════════════════
 
 @st.cache_resource
 def get_collection():
     ef     = ONNXMiniLM_L6_V2()
     client = chromadb.PersistentClient(path=CHROMA_DIR)
-    col    = client.get_or_create_collection(
+
+    # Delete old collection to force fresh re-index with correct subjects
+    try:
+        client.delete_collection(COLLECTION_NAME)
+    except Exception:
+        pass
+
+    col = client.get_or_create_collection(
         name=COLLECTION_NAME,
         embedding_function=ef,
         metadata={"hnsw:space": "cosine"},
@@ -245,10 +235,10 @@ if col.count() == 0:
     st.markdown("""
     <div style="background:linear-gradient(135deg,rgba(99,102,241,0.15),rgba(79,70,229,0.08));
          border:1px solid rgba(99,102,241,0.25);border-radius:20px;padding:28px;margin-bottom:20px;">
-      <h2 style="margin:0 0 8px 0;">🔄 First-time Setup</h2>
+      <h2 style="margin:0 0 8px 0;">🔄 Setting Up NCERT Database</h2>
       <p style="color:#94a3b8;margin:0;">
-        Downloading your NCERT books from Google Drive and indexing them.
-        This runs <strong>only once</strong> — about 3–5 minutes.
+        Downloading and indexing your NCERT books from Google Drive.
+        This runs <strong>only once</strong> — takes about 3–5 minutes.
         After this the app loads instantly every time.
       </p>
     </div>
@@ -264,22 +254,20 @@ if col.count() == 0:
     for idx, (zip_name, (file_id, subject)) in enumerate(GDRIVE_FILES.items()):
         pct = int((idx / 5) * 45)
         progress_bar.progress(pct, text=f"⬇️ Downloading {zip_name}...")
-        status_text.text(f"⬇️ Downloading {zip_name} ({idx+1}/5)...")
+        status_text.text(f"⬇️ Downloading {zip_name} ({idx+1}/5) — {subject}...")
 
         zip_path = os.path.join(PDF_DIR, zip_name)
-        success  = download_from_gdrive(file_id, zip_path, zip_name)
+        success  = download_from_gdrive(file_id, zip_path)
 
         if not success:
             log_area.warning(f"⚠️ Could not download {zip_name} — skipping")
             continue
 
-        # Extract PDFs
         status_text.text(f"📦 Extracting {zip_name}...")
         pdfs = extract_zip(zip_path, PDF_DIR, subject)
         all_pdfs.extend(pdfs)
-        log_area.success(f"✅ {zip_name} → {len(pdfs)} PDFs extracted")
+        log_area.success(f"✅ {zip_name} → {len(pdfs)} PDFs ({subject})")
 
-        # Delete ZIP to save disk space
         try:
             os.remove(zip_path)
         except Exception:
@@ -291,23 +279,20 @@ if col.count() == 0:
         **How to fix:**
         1. Open your Google Drive folder
         2. Right-click each ZIP → **Share** → **Anyone with the link** → **Viewer**
-        3. Make sure sharing is set to public
-        4. Reboot the app from Streamlit Cloud
+        3. Reboot the app from Streamlit Cloud → Manage App
         """)
         st.stop()
 
-    # Index all PDFs
     status_text.text(f"🧠 Indexing {len(all_pdfs)} PDFs into vector database...")
     total = index_pdfs(col, all_pdfs, progress_bar, status_text)
-
     progress_bar.progress(100, text=f"✅ Done! {total:,} chunks indexed.")
     status_text.empty()
 
     if total > 0:
-        st.success(f"🎉 Setup complete! {total:,} chunks indexed from {len(all_pdfs)} PDFs. Loading app now...")
+        st.success(f"🎉 Setup complete! {total:,} chunks indexed from {len(all_pdfs)} PDFs.")
         st.rerun()
     else:
-        st.error("❌ Indexing failed — no chunks were created from the PDFs.")
+        st.error("❌ Indexing failed — no chunks created.")
         st.stop()
 
 # ════════════════════════════════════════════════════════════════
@@ -448,7 +433,7 @@ def retrieve_chunks(query: str, subject: str, top_k: int = 6) -> list:
 
 def generate_answer(question: str, chunks: list, subject: str, style: str) -> str:
     if not chunks:
-        return "I couldn't find relevant content. Try selecting a specific subject or rephrasing your question."
+        return "I couldn't find relevant content. Try selecting a specific subject or rephrasing."
 
     context = ""
     for i, c in enumerate(chunks[:6], 1):
@@ -476,7 +461,7 @@ Rules:
 - Only use the content above — no outside knowledge
 - For Maths: show steps clearly
 - For Science: explain simply
-- If content doesn't fully answer, say so honestly
+- If content does not fully answer, say so honestly
 - End with: "📚 From: [Subject] — [Chapter]"
 """
     try:
