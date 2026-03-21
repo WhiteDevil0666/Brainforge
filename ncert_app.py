@@ -1,5 +1,5 @@
 # ================================================================
-# BrainForge — NCERT Chat (Complete Single File)
+# BrainForge — NCERT Chat (AI + NCERT Combined with Memory)
 # ================================================================
 # requirements.txt:
 #   streamlit
@@ -28,11 +28,11 @@ from groq import Groq
 CHROMA_DIR      = "./ncert_db"
 COLLECTION_NAME = "ncert_class8"
 PDF_DIR         = "./ncert_pdfs"
-GROQ_MODEL      = "llama-3.3-70b-versatile"   # upgraded for better answers
+GROQ_MODEL      = "llama-3.3-70b-versatile"
 CHUNK_SIZE      = 600
 CHUNK_OVERLAP   = 100
+MAX_HISTORY     = 6   # number of past messages to keep in context
 
-# ── CORRECTED Google Drive ZIP IDs ────────────────────────────
 GDRIVE_FILES = {
     "Math.zip":           ("1EUcfrL8JeTz3zkuPHggxHj-dcCOrtgzN", "Mathematics"),
     "Science.zip":        ("1ABT9Fu0Dmmi9AnhqECunbo9ehTt_5Lvk", "Science"),
@@ -67,11 +67,12 @@ div[data-testid="stChatMessage"] * { color:#f1f5f9 !important; }
 div[data-testid="stSelectbox"] label, label[data-testid="stWidgetLabel"] { color:#e2e8f0 !important; font-weight:600 !important; font-size:0.88em !important; }
 .source-card { background:rgba(255,255,255,0.03); border-radius:0 10px 10px 0; padding:10px 14px; margin-bottom:8px; }
 .stat-pill { display:inline-flex; align-items:center; gap:5px; background:rgba(99,102,241,0.12); border:1px solid rgba(99,102,241,0.25); border-radius:20px; padding:4px 12px; font-size:0.78em; font-weight:700; color:#a5b4fc; margin-right:6px; }
+.memory-badge { background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.25); border-radius:20px; padding:3px 10px; font-size:0.72em; font-weight:700; color:#86efac; }
 </style>
 """, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
-# DOWNLOAD FROM GOOGLE DRIVE
+# GOOGLE DRIVE DOWNLOAD
 # ════════════════════════════════════════════════════════════════
 
 def download_from_gdrive(file_id: str, dest_path: str) -> bool:
@@ -163,20 +164,16 @@ def chunk_text(text: str) -> list:
 def index_pdfs(col, pdf_list: list, progress_bar, status_text) -> int:
     total_chunks = 0
     total_pdfs   = len(pdf_list)
-
     for i, (pdf_path, subject, filename) in enumerate(pdf_list):
         chapter = os.path.splitext(filename)[0].upper()
         status_text.text(f"📖 Indexing: {filename} ({i+1}/{total_pdfs}) — {subject}")
         progress_bar.progress(int((i / max(total_pdfs, 1)) * 85) + 10)
-
         text, _ = extract_pdf_text(pdf_path)
         if not text.strip():
             continue
-
         chunks = chunk_text(text)
         if not chunks:
             continue
-
         BATCH = 50
         for j in range(0, len(chunks), BATCH):
             batch     = chunks[j:j+BATCH]
@@ -197,7 +194,6 @@ def index_pdfs(col, pdf_list: list, progress_bar, status_text) -> int:
                 total_chunks += len(batch)
             except Exception:
                 pass
-
     return total_chunks
 
 # ════════════════════════════════════════════════════════════════
@@ -208,13 +204,10 @@ def index_pdfs(col, pdf_list: list, progress_bar, status_text) -> int:
 def get_collection():
     ef     = ONNXMiniLM_L6_V2()
     client = chromadb.PersistentClient(path=CHROMA_DIR)
-
-    # Delete old collection to force fresh re-index
     try:
         client.delete_collection(COLLECTION_NAME)
     except Exception:
         pass
-
     col = client.get_or_create_collection(
         name=COLLECTION_NAME,
         embedding_function=ef,
@@ -237,7 +230,6 @@ if col.count() == 0:
       <p style="color:#94a3b8;margin:0;">
         Downloading and indexing your NCERT books from Google Drive.
         This runs <strong>only once</strong> — about 3–5 minutes.
-        After this the app loads instantly every time.
       </p>
     </div>
     """, unsafe_allow_html=True)
@@ -246,51 +238,37 @@ if col.count() == 0:
     status_text  = st.empty()
     log_area     = st.container()
     all_pdfs     = []
-
     os.makedirs(PDF_DIR, exist_ok=True)
 
     for idx, (zip_name, (file_id, subject)) in enumerate(GDRIVE_FILES.items()):
-        pct = int((idx / 5) * 45)
-        progress_bar.progress(pct, text=f"⬇️ Downloading {zip_name}...")
+        progress_bar.progress(int((idx / 5) * 45), text=f"⬇️ Downloading {zip_name}...")
         status_text.text(f"⬇️ Downloading {zip_name} ({idx+1}/5) — {subject}...")
-
         zip_path = os.path.join(PDF_DIR, zip_name)
-        success  = download_from_gdrive(file_id, zip_path)
-
-        if not success:
+        if download_from_gdrive(file_id, zip_path):
+            status_text.text(f"📦 Extracting {zip_name}...")
+            pdfs = extract_zip(zip_path, PDF_DIR, subject)
+            all_pdfs.extend(pdfs)
+            log_area.success(f"✅ {zip_name} → {len(pdfs)} PDFs ({subject})")
+            try:
+                os.remove(zip_path)
+            except Exception:
+                pass
+        else:
             log_area.warning(f"⚠️ Could not download {zip_name} — skipping")
-            continue
-
-        status_text.text(f"📦 Extracting {zip_name}...")
-        pdfs = extract_zip(zip_path, PDF_DIR, subject)
-        all_pdfs.extend(pdfs)
-        log_area.success(f"✅ {zip_name} → {len(pdfs)} PDFs ({subject})")
-
-        try:
-            os.remove(zip_path)
-        except Exception:
-            pass
 
     if not all_pdfs:
-        st.error("❌ No PDFs could be downloaded.")
-        st.markdown("""
-        **How to fix:**
-        1. Open your Google Drive folder
-        2. Right-click each ZIP → **Share** → **Anyone with the link** → **Viewer**
-        3. Reboot the app from Streamlit Cloud → Manage App
-        """)
+        st.error("❌ No PDFs downloaded. Make sure Google Drive ZIPs are publicly shared.")
         st.stop()
 
-    status_text.text(f"🧠 Indexing {len(all_pdfs)} PDFs into vector database...")
     total = index_pdfs(col, all_pdfs, progress_bar, status_text)
     progress_bar.progress(100, text=f"✅ Done! {total:,} chunks indexed.")
     status_text.empty()
 
     if total > 0:
-        st.success(f"🎉 Setup complete! {total:,} chunks indexed from {len(all_pdfs)} PDFs.")
+        st.success(f"🎉 Setup complete! {total:,} chunks from {len(all_pdfs)} PDFs.")
         st.rerun()
     else:
-        st.error("❌ Indexing failed — no chunks created.")
+        st.error("❌ Indexing failed.")
         st.stop()
 
 # ════════════════════════════════════════════════════════════════
@@ -326,8 +304,7 @@ st.sidebar.markdown("""
 
 st.sidebar.markdown("### 📚 Filter by Subject")
 selected_subject = st.sidebar.radio(
-    "Select Subject",
-    SUBJECTS,
+    "Select Subject", SUBJECTS,
     format_func=lambda x: f"{SUBJECT_ICONS.get(x,'📖')} {x}",
     label_visibility="collapsed",
     key="subject_filter",
@@ -348,14 +325,31 @@ st.sidebar.markdown(f"""
 """, unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
-show_sources = st.sidebar.toggle("📄 Show Sources", value=True)
+show_sources = st.sidebar.toggle("📄 Show NCERT Sources", value=True)
 answer_depth = st.sidebar.selectbox(
     "Answer Style",
     ["Simple (Class 8 level)", "Detailed", "Bullet Points", "With Examples"],
 )
 
-if st.sidebar.button("🗑️ Clear Chat", use_container_width=True):
-    st.session_state.messages = []
+# Conversation memory indicator
+msgs = st.session_state.get("messages", [])
+if len(msgs) > 0:
+    turns = len([m for m in msgs if m["role"] == "user"])
+    st.sidebar.markdown(f"""
+    <div style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);
+         border-radius:10px;padding:10px 14px;margin-top:8px;">
+      <p style="margin:0;font-size:0.75em;color:#86efac;font-weight:700;">
+        🧠 Memory Active — {turns} question{"s" if turns != 1 else ""} in context
+      </p>
+      <p style="margin:4px 0 0 0;font-size:0.7em;color:#64748b;">
+        AI remembers your conversation
+      </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+if st.sidebar.button("🗑️ Clear Chat & Memory", use_container_width=True):
+    st.session_state.messages  = []
+    st.session_state.ncert_ctx = ""
     st.rerun()
 
 # ════════════════════════════════════════════════════════════════
@@ -372,26 +366,26 @@ st.markdown(f"""
     <div>
       <h1 style="margin:0;font-size:1.6em;font-weight:800;">NCERT Chat</h1>
       <p style="margin:0;color:#94a3b8;font-size:0.85em;">
-        Answers from Class 8 NCERT books · Powered by your PDFs
+        AI-powered tutor grounded in your Class 8 NCERT books · Remembers your conversation
       </p>
     </div>
   </div>
   <div style="margin-top:10px;">
     <span class="stat-pill">{icon} {selected_subject}</span>
     <span class="stat-pill">📦 {total_chunks:,} chunks</span>
-    <span class="stat-pill">📄 Page Citations</span>
+    <span class="stat-pill">🧠 AI + NCERT</span>
+    <span class="stat-pill">💬 Memory</span>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
 if groq_client is None:
-    st.error("❌ GROQ_API_KEY not set.")
-    st.markdown("Go to **Streamlit Cloud → App Settings → Secrets** and add:")
+    st.error("❌ GROQ_API_KEY not set. Go to Streamlit Cloud → Secrets.")
     st.code('GROQ_API_KEY = "your_key_here"')
     st.stop()
 
 # ════════════════════════════════════════════════════════════════
-# SEARCH + ANSWER
+# SEARCH
 # ════════════════════════════════════════════════════════════════
 
 def retrieve_chunks(query: str, subject: str, top_k: int = 6) -> list:
@@ -425,68 +419,136 @@ def retrieve_chunks(query: str, subject: str, top_k: int = 6) -> list:
             [c for c in chunks if c["relevance"] > 15],
             key=lambda x: x["relevance"], reverse=True,
         )
-
     except Exception as e:
         st.error(f"Search error: {e}")
         return []
 
+# ════════════════════════════════════════════════════════════════
+# GENERATE ANSWER — AI + NCERT + MEMORY
+# ════════════════════════════════════════════════════════════════
 
-def generate_answer(question: str, chunks: list, subject: str, style: str) -> str:
-    if not chunks:
-        return "I couldn't find relevant content. Try selecting a specific subject or rephrasing."
+def generate_answer(
+    question: str,
+    chunks: list,
+    subject: str,
+    style: str,
+    chat_history: list,
+) -> str:
+    """
+    Generates a rich answer by combining:
+    1. NCERT chunks as reference material
+    2. AI knowledge to fill gaps and explain clearly
+    3. Full conversation history for follow-up handling
+    """
 
-    context = ""
-    for i, c in enumerate(chunks[:6], 1):
-        context += f"\n[Source {i}: {c['subject']} | {c['chapter']} | Page {c['page']}]\n{c['text']}\n"
+    # Build NCERT reference block
+    ncert_reference = ""
+    if chunks:
+        ncert_reference = "\n\nNCERT REFERENCE MATERIAL:\n"
+        for i, c in enumerate(chunks[:6], 1):
+            ncert_reference += f"\n[Ref {i} — {c['subject']} | {c['chapter']} | Page {c['page']}]\n{c['text']}\n"
 
     style_map = {
-        "Bullet":   "Format the answer as clear numbered bullet points.",
-        "Detailed": "Give a detailed thorough explanation with all sub-points covered.",
-        "Examples": "Use real-life examples and analogies a Class 8 student can relate to.",
+        "Bullet":   "Structure your answer as clear numbered bullet points with sub-points where needed.",
+        "Detailed": "Give a comprehensive, detailed explanation covering all aspects of the topic.",
+        "Examples": "Include real-life examples and analogies that a Class 8 student can easily relate to.",
     }
     style_instr = next((v for k, v in style_map.items() if k in style),
-                       "Use simple clear language suitable for a Class 8 student.")
+                       "Explain clearly and simply, suitable for a Class 8 student.")
 
-    # ── IMPROVED PROMPT — forces LLM to use available content ──
-    prompt = f"""You are a helpful NCERT tutor for Class 8 students in India.
-Your job is to answer the student's question using the NCERT content provided.
+    # ── System prompt — defines the AI tutor personality ──────
+    system_prompt = f"""You are BrainForge — an expert AI tutor for Class 8 students in India.
 
-Subject: {subject}
-Student's Question: {question}
+Your knowledge comes from two sources:
+1. NCERT textbooks (Class 8) — your PRIMARY source, always refer to this first
+2. Your own AI knowledge — use this to ENRICH, EXPLAIN, and FILL GAPS
 
-NCERT Content Retrieved:
-{context}
+HOW TO ANSWER:
+- Start with what the NCERT says about the topic
+- Then use your AI knowledge to explain it better, add examples, analogies, diagrams in text
+- Make the answer feel like a great teacher explaining — not just copy-pasting from a book
+- Always be accurate to the NCERT curriculum
+- {style_instr}
 
-STRICT RULES — follow all of these:
-1. READ all the NCERT content carefully before answering
-2. Extract EVERY relevant fact, definition, or explanation from the content
-3. Use the content to build a complete answer — even if it is partial or indirect
-4. If the content mentions related concepts, use them to explain
-5. {style_instr}
-6. For Maths: show steps clearly with examples
-7. For Science: explain the concept with simple language
-8. NEVER say "I don't have information" if ANY relevant content exists
-9. NEVER refuse to answer — always give the best answer from what is available
-10. At the end write: "📚 From: [Subject] — [Chapter name]"
+CONVERSATION RULES:
+- You REMEMBER the full conversation — use it for follow-up questions
+- If the student asks "explain more", "what about X", "give example" — refer to previous answers
+- If a follow-up question is asked without context, infer from conversation history
+- Never lose track of what was discussed earlier
 
-Now answer the question clearly and helpfully:"""
+FORMATTING:
+- Use **bold** for key terms
+- Use clear headings when needed
+- Keep language simple for Class 8 level
+- End every answer with: "📚 NCERT Reference: [Subject] — [Chapter]"
+- After the reference, add: "💬 Ask me to explain more, give examples, or test you!"
+
+Subject filter active: {subject}"""
+
+    # ── Build message history for Groq ────────────────────────
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # Add last MAX_HISTORY messages for memory
+    recent_history = chat_history[-(MAX_HISTORY * 2):]
+    for msg in recent_history:
+        if msg["role"] in ("user", "assistant"):
+            messages.append({
+                "role":    msg["role"],
+                "content": msg["content"],
+            })
+
+    # Add current question with NCERT reference
+    user_message = f"""Question: {question}
+{ncert_reference}
+
+Please give a complete, well-explained answer using both the NCERT reference above and your knowledge."""
+
+    messages.append({"role": "user", "content": user_message})
 
     try:
         resp = groq_client.chat.completions.create(
             model=GROQ_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful Class 8 NCERT tutor. Always answer using the provided content. Never say you don't have information if content is available. Extract every relevant detail from the content."
-                },
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2,
-            max_tokens=1000,
+            messages=messages,
+            temperature=0.3,
+            max_tokens=1200,
         )
         return resp.choices[0].message.content.strip()
     except Exception as e:
         return f"Answer generation failed: {e}"
+
+
+# ════════════════════════════════════════════════════════════════
+# NEEDS NCERT SEARCH?
+# For follow-up questions, skip search and use memory instead
+# ════════════════════════════════════════════════════════════════
+
+def is_followup(question: str, history: list) -> bool:
+    """
+    Detect if this is a follow-up question that doesn't need
+    a new NCERT search — can be answered from conversation memory.
+    """
+    if not history:
+        return False
+
+    followup_patterns = [
+        r"^(what about|tell me more|explain more|can you|how about|give me|more about)",
+        r"^(why|how|what is|define|elaborate|expand|continue|go on|next)",
+        r"^(example|examples|instance|illustrate|show me)",
+        r"^(i (don't|do not) understand|unclear|confused|simpler|easier)",
+        r"^(test me|quiz me|ask me|mcq|question)",
+        r"^(what does .{1,30} mean|meaning of|define)",
+        r"\?$",
+    ]
+
+    q_lower = question.lower().strip()
+
+    # Very short questions are likely follow-ups
+    if len(q_lower.split()) <= 4:
+        for pattern in followup_patterns:
+            if re.match(pattern, q_lower):
+                return True
+
+    return False
 
 
 # ════════════════════════════════════════════════════════════════
@@ -506,12 +568,16 @@ SUGGESTIONS = {
 # CHAT UI
 # ════════════════════════════════════════════════════════════════
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+if "messages"  not in st.session_state:
+    st.session_state.messages  = []
+if "ncert_ctx" not in st.session_state:
+    st.session_state.ncert_ctx = ""
 
 
 def render_sources(chunks):
-    with st.expander(f"📄 {len(chunks)} sources from NCERT PDFs"):
+    if not chunks:
+        return
+    with st.expander(f"📄 {len(chunks)} NCERT sources used as reference"):
         for c in chunks:
             rel   = c["relevance"]
             color = "#22c55e" if rel >= 70 else "#f59e0b" if rel >= 45 else "#94a3b8"
@@ -527,20 +593,43 @@ def render_sources(chunks):
                 📄 Page {c['page']} · {c['source']}
               </div>
               <div style="color:#cbd5e1;font-size:0.82em;line-height:1.6;">
-                {c['text'][:350]}{'...' if len(c['text'])>350 else ''}
+                {c['text'][:300]}{'...' if len(c['text'])>300 else ''}
               </div>
             </div>""", unsafe_allow_html=True)
 
 
-def process_question(q):
-    with st.spinner("🔍 Searching NCERT books..."):
-        chunks = retrieve_chunks(q, selected_subject)
+def process_question(question: str):
+    """
+    Full pipeline:
+    1. Decide if new NCERT search is needed or use memory
+    2. Retrieve relevant NCERT chunks
+    3. Generate AI + NCERT combined answer with conversation memory
+    """
+    history = st.session_state.messages
+    chunks  = []
+
+    # Check if follow-up — if yes, skip NCERT search
+    if is_followup(question, history):
+        # Use memory only — no new search needed
+        chunks = []
+    else:
+        # New topic — search NCERT
+        with st.spinner("🔍 Searching NCERT books..."):
+            chunks = retrieve_chunks(question, selected_subject)
+
     with st.spinner("🤖 Generating answer..."):
-        answer = generate_answer(q, chunks, selected_subject, answer_depth)
+        answer = generate_answer(
+            question=question,
+            chunks=chunks,
+            subject=selected_subject,
+            style=answer_depth,
+            chat_history=history,
+        )
+
     return answer, chunks
 
 
-# Suggestions
+# Suggestions (shown on empty chat)
 if not st.session_state.messages:
     st.markdown("### 💡 Try asking:")
     suggestions = SUGGESTIONS.get(selected_subject, SUGGESTIONS["All Subjects"])
@@ -565,18 +654,21 @@ for msg in st.session_state.messages:
 
 # Chat input
 question = st.chat_input(
-    f"Ask anything from Class 8 {selected_subject} NCERT..."
+    f"Ask anything from Class 8 {selected_subject} — or ask a follow-up!"
     if selected_subject != "All Subjects"
-    else "Ask anything from Class 8 NCERT (Maths, Science, History, Geography, Civics)..."
+    else "Ask anything from Class 8 NCERT — I remember our conversation!"
 )
+
 if question:
     with st.chat_message("user"):
         st.markdown(question)
+
     with st.chat_message("assistant"):
         answer, chunks = process_question(question)
         st.markdown(answer)
         if show_sources and chunks:
             render_sources(chunks)
+
     st.session_state.messages += [
         {"role": "user",      "content": question, "chunks": []},
         {"role": "assistant", "content": answer,   "chunks": chunks},
