@@ -1,0 +1,15 @@
+streamlit
+pandas
+numpy
+sentence-transformers
+torch
+google-genai
+gspread
+google-auth
+python-dotenv
+groq
+PyPDF2
+Pillow
+chromadb
+faiss-cpu
+supabase
