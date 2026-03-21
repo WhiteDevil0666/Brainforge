@@ -6,3 +6,12 @@ supabase
 python-dotenv
 PyPDF2
 Pillow
+sentence-transformers
+torch
+google-genai
+gspread
+google-auth
+python-dotenv
+groq
+chromadb
+faiss-cpu
