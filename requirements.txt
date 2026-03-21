@@ -3,3 +3,4 @@ groq
 chromadb==1.5.5
 pymupdf
 requests
+gdown
