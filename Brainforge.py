@@ -19,7 +19,7 @@ from groq import Groq
 # CONFIG
 # ════════════════════════════════════════════════════════════════
 
-CHROMA_DIR       = "chroma_study_db"
+CHROMA_DIR       = "."
 COLLECTION_NAME  = "ncert_class8"
 GROQ_MODEL       = "llama-3.1-8b-instant"
 GROQ_MODEL_LARGE = "llama-3.3-70b-versatile"
