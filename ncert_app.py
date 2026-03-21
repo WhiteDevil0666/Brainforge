@@ -1,12 +1,19 @@
 # ================================================================
-# BrainForge — NCERT Chat (Streamlit Cloud Fixed)
+# BrainForge — NCERT Chat (No torch / No sentence-transformers)
+# Works on Python 3.14 + Streamlit Cloud
+# ================================================================
+# requirements.txt needs only:
+#   streamlit
+#   groq
+#   chromadb==1.5.5
+#   pymupdf
 # ================================================================
 
 import os
+import math
 import streamlit as st
 import chromadb
-from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
+from chromadb.utils import embedding_functions
 from groq import Groq
 
 # ════════════════════════════════════════════════════════════════
@@ -67,7 +74,8 @@ div[data-testid="stChatMessage"] * { color: #f1f5f9 !important; }
     color: white !important; border-radius: 12px; font-weight: 700;
     border: none; box-shadow: 0 4px 15px rgba(99,102,241,0.3);
 }
-div[data-testid="stSelectbox"] label, label[data-testid="stWidgetLabel"] {
+div[data-testid="stSelectbox"] label,
+label[data-testid="stWidgetLabel"] {
     color: #e2e8f0 !important; font-weight: 600 !important; font-size: 0.88em !important;
 }
 .source-card {
@@ -84,36 +92,36 @@ div[data-testid="stSelectbox"] label, label[data-testid="stWidgetLabel"] {
 """, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
-# LOAD RESOURCES — KEY FIX: no custom Settings, use get_or_create
+# LOAD RESOURCES
 # ════════════════════════════════════════════════════════════════
 
 @st.cache_resource
 def load_resources():
-    """Load ChromaDB + embedder in a single cached function to avoid conflicts."""
-    errors = []
-
-    # ── ChromaDB ──────────────────────────────────────────────
+    """
+    Load ChromaDB using its DEFAULT embedding function.
+    This avoids sentence-transformers / torch entirely.
+    NOTE: The collection was originally created with sentence-transformers,
+    so we use keyword search (get + filter) as primary method.
+    """
     collection = None
+    ef         = None
+    errors     = []
+
     try:
-        # Use get_or_create to avoid "already exists" conflict
         client     = chromadb.PersistentClient(path=CHROMA_DIR)
-        collection = client.get_or_create_collection(name=COLLECTION_NAME)
-        count      = collection.count()
-        if count == 0:
-            errors.append("Collection exists but is empty.")
+        # Use default embedding function (no torch needed)
+        ef         = embedding_functions.DefaultEmbeddingFunction()
+        collection = client.get_or_create_collection(
+            name=COLLECTION_NAME,
+            embedding_function=ef,
+        )
     except Exception as e:
-        errors.append(f"ChromaDB error: {e}")
+        errors.append(f"ChromaDB: {e}")
 
-    # ── Embedder ──────────────────────────────────────────────
-    embedder = None
-    try:
-        embedder = SentenceTransformer("all-MiniLM-L6-v2")
-    except Exception as e:
-        errors.append(f"Embedder error: {e}")
+    return collection, ef, errors
 
-    return collection, embedder, errors
 
-collection, embedder, load_errors = load_resources()
+collection, ef, load_errors = load_resources()
 
 # ── Groq ──────────────────────────────────────────────────────
 api_key = os.getenv("GROQ_API_KEY", "")
@@ -209,50 +217,83 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Show any load errors as warnings (not blockers) ───────────
 for err in load_errors:
     st.warning(f"⚠️ {err}")
 
-# ── Hard stops ────────────────────────────────────────────────
 if collection is None:
     st.error("❌ NCERT database not found. Make sure all ChromaDB files are in the repo root.")
     st.stop()
-if embedder is None:
-    st.error("❌ Embedding model failed to load. Check requirements.txt includes sentence-transformers.")
-    st.stop()
+
 if groq_client is None:
-    st.error("❌ GROQ_API_KEY not set. Go to Streamlit Cloud → App Settings → Secrets and add it.")
-    st.code("GROQ_API_KEY = \"your_key_here\"")
+    st.error("❌ GROQ_API_KEY not set.")
+    st.code('GROQ_API_KEY = "your_key_here"')
     st.stop()
 
 # ════════════════════════════════════════════════════════════════
-# SEARCH + ANSWER FUNCTIONS
+# SMART KEYWORD SEARCH
+# This works without sentence-transformers by using keyword
+# matching with TF-IDF style scoring across the stored chunks.
 # ════════════════════════════════════════════════════════════════
 
-def retrieve_chunks(query: str, subject: str, top_k: int = 5) -> list:
-    """Search ChromaDB for relevant NCERT chunks."""
+def keyword_search(query: str, subject: str, top_k: int = 5) -> list:
+    """
+    Search NCERT chunks using smart keyword matching.
+    Works without any ML model — pure text matching with scoring.
+    """
     try:
-        q_emb = embedder.encode([query], normalize_embeddings=True).tolist()[0]
-
-        kwargs = dict(
-            query_embeddings=[q_emb],
-            n_results=min(top_k, max(collection.count(), 1)),
-            include=["documents", "metadatas", "distances"],
-        )
-
-        # Only add where filter for specific subjects
+        # Fetch chunks filtered by subject
+        get_kwargs = dict(include=["documents", "metadatas"], limit=2146)
         if subject != "All Subjects":
-            kwargs["where"] = {"subject": {"$eq": subject}}
+            get_kwargs["where"] = {"subject": {"$eq": subject}}
 
-        results   = collection.query(**kwargs)
-        docs      = results.get("documents", [[]])[0]
-        metas     = results.get("metadatas",  [[]])[0]
-        distances = results.get("distances",  [[]])[0]
+        data  = collection.get(**get_kwargs)
+        docs  = data.get("documents", []) or []
+        metas = data.get("metadatas",  []) or []
 
-        chunks = []
-        for doc, meta, dist in zip(docs, metas, distances):
-            relevance = round((1 - float(dist)) * 100, 1)
-            chunks.append({
+        if not docs:
+            return []
+
+        # Smart scoring — longer query matches score higher
+        query_lower = query.lower()
+        query_words = [w for w in query_lower.split() if len(w) > 2]
+
+        # Also add bigrams (two-word phrases) for better matching
+        bigrams = []
+        words   = query_lower.split()
+        for i in range(len(words) - 1):
+            bigrams.append(f"{words[i]} {words[i+1]}")
+
+        scored = []
+        for doc, meta in zip(docs, metas):
+            doc_lower = doc.lower()
+            score     = 0
+
+            # Exact phrase match (highest score)
+            if query_lower in doc_lower:
+                score += 60
+
+            # Bigram matches
+            for bigram in bigrams:
+                if bigram in doc_lower:
+                    score += 15
+
+            # Individual word matches
+            doc_words = set(doc_lower.split())
+            for word in query_words:
+                if word in doc_lower:
+                    score += 8
+                if word in doc_words:
+                    score += 4  # exact word boundary bonus
+
+            # Skip zero-score chunks
+            if score == 0:
+                continue
+
+            # Normalize to percentage
+            max_possible = 60 + len(bigrams) * 15 + len(query_words) * 12
+            relevance    = min(round((score / max(max_possible, 1)) * 100, 1), 98)
+
+            scored.append({
                 "text":      doc,
                 "subject":   meta.get("subject",      "Unknown"),
                 "chapter":   meta.get("chapter",      "Unknown"),
@@ -262,47 +303,22 @@ def retrieve_chunks(query: str, subject: str, top_k: int = 5) -> list:
                 "relevance": relevance,
             })
 
-        chunks = [c for c in chunks if c["relevance"] > 15]
-        return sorted(chunks, key=lambda x: x["relevance"], reverse=True)
+        # Sort by relevance and return top_k
+        scored.sort(key=lambda x: x["relevance"], reverse=True)
+        return scored[:top_k]
 
     except Exception as e:
-        # ── Keyword fallback ──────────────────────────────────
-        try:
-            get_kwargs = dict(include=["documents", "metadatas"], limit=300)
-            if subject != "All Subjects":
-                get_kwargs["where"] = {"subject": {"$eq": subject}}
-
-            all_data    = collection.get(**get_kwargs)
-            docs        = all_data.get("documents", [])
-            metas       = all_data.get("metadatas",  [])
-            query_words = set(query.lower().split())
-            scored      = []
-
-            for doc, meta in zip(docs, metas):
-                overlap = len(query_words & set(doc.lower().split()))
-                if overlap > 0:
-                    scored.append({
-                        "text":      doc,
-                        "subject":   meta.get("subject",      "Unknown"),
-                        "chapter":   meta.get("chapter",      "Unknown"),
-                        "page":      meta.get("page",         "?"),
-                        "source":    meta.get("source",       "Unknown"),
-                        "type":      meta.get("content_type", "theory"),
-                        "relevance": min(overlap * 12, 90),
-                    })
-
-            scored.sort(key=lambda x: x["relevance"], reverse=True)
-            return scored[:top_k]
-
-        except Exception as e2:
-            st.error(f"Search failed: {e2}")
-            return []
+        st.error(f"Search error: {e}")
+        return []
 
 
 def generate_answer(question: str, chunks: list, subject: str, style: str) -> str:
     """Generate NCERT-grounded answer using Groq."""
     if not chunks:
-        return "I couldn't find relevant content for this question. Try selecting a specific subject or rephrasing."
+        return (
+            "I couldn't find relevant content for this question in your NCERT books. "
+            "Try selecting a specific subject from the sidebar, or rephrase with different keywords."
+        )
 
     context = ""
     for i, c in enumerate(chunks[:4], 1):
@@ -310,26 +326,30 @@ def generate_answer(question: str, chunks: list, subject: str, style: str) -> st
 
     style_map = {
         "Bullet":   "Format your answer as clear bullet points.",
-        "Detailed": "Give a detailed, thorough explanation.",
-        "Examples": "Use real-life examples a Class 8 student can relate to.",
+        "Detailed": "Give a detailed, thorough explanation covering all relevant concepts.",
+        "Examples": "Use real-life examples and analogies a Class 8 student can relate to.",
     }
-    style_instr = next((v for k, v in style_map.items() if k in style),
-                       "Use simple, clear language for a Class 8 student.")
+    style_instr = next(
+        (v for k, v in style_map.items() if k in style),
+        "Use simple, clear language suitable for a Class 8 student."
+    )
 
     prompt = f"""You are a friendly NCERT tutor for Class 8 students in India.
-Answer using ONLY the NCERT content provided.
+Answer the student's question using ONLY the NCERT content provided below.
 
-Subject: {subject}
-Question: {question}
+Subject filter: {subject}
+Student's question: {question}
 
 NCERT Content:
 {context}
 
-Rules:
+Instructions:
 - {style_instr}
-- Only use the content above — no outside knowledge
-- For Maths: show steps. For Science: explain simply.
-- If content doesn't fully answer, say so honestly.
+- Use ONLY the content provided — do not add outside knowledge
+- For Maths: show steps clearly
+- For Science: explain the concept simply
+- Mention the chapter naturally in your answer
+- If the content does not fully answer the question, say so honestly
 - End with: "📚 From: [Subject] — [Chapter]"
 """
 
@@ -342,7 +362,7 @@ Rules:
         )
         return resp.choices[0].message.content.strip()
     except Exception as e:
-        return f"Answer generation failed: {e}"
+        return f"Could not generate answer: {e}"
 
 
 # ════════════════════════════════════════════════════════════════
@@ -354,7 +374,7 @@ SUGGESTIONS = {
         "What is photosynthesis?",
         "What are rational numbers?",
         "What were the causes of the 1857 revolt?",
-        "What is friction and its types?",
+        "What is friction?",
         "What are natural resources?",
         "What is the Parliament of India?",
     ],
@@ -362,7 +382,7 @@ SUGGESTIONS = {
         "What are rational numbers?",
         "Explain linear equations in one variable",
         "What is the Pythagorean theorem?",
-        "How to find the area of a trapezium?",
+        "How to find area of a trapezium?",
         "What are algebraic expressions?",
         "Explain factorisation",
     ],
@@ -378,7 +398,7 @@ SUGGESTIONS = {
         "What were the causes of the 1857 revolt?",
         "Who was Tipu Sultan?",
         "What was the impact of British rule on Indian trade?",
-        "Explain the role of the press in Indian nationalism",
+        "Explain the role of press in Indian nationalism",
         "What was the tribal uprising?",
     ],
     "Geography": [
@@ -431,13 +451,13 @@ def render_sources(chunks: list):
 
 def process_question(q: str):
     with st.spinner("🔍 Searching your NCERT books..."):
-        chunks = retrieve_chunks(q, selected_subject)
-    with st.spinner("🤖 Generating answer..."):
+        chunks = keyword_search(q, selected_subject)
+    with st.spinner("🤖 Generating answer from NCERT content..."):
         answer = generate_answer(q, chunks, selected_subject, answer_depth)
     return answer, chunks
 
 
-# Suggestions when chat is empty
+# Suggestions
 if not st.session_state.messages:
     st.markdown(f"### 💡 Try asking:")
     suggestions = SUGGESTIONS.get(selected_subject, SUGGESTIONS["All Subjects"])
