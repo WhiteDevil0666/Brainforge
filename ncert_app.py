@@ -1,25 +1,20 @@
 # ================================================================
 # BrainForge — NCERT Chat (Complete Single File)
 # ================================================================
-# HOW IT WORKS:
-#   1. First run: downloads ZIPs from Google Drive
-#   2. Extracts PDFs from ZIPs
-#   3. Indexes all PDFs into ChromaDB (built-in embedder)
-#   4. Every run after: loads instantly from saved index
-#
 # requirements.txt:
 #   streamlit
 #   groq
 #   chromadb==1.5.5
 #   pymupdf
 #   requests
+#   gdown
 # ================================================================
 
 import os
 import re
 import uuid
 import zipfile
-import requests
+import gdown
 import streamlit as st
 import chromadb
 from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
@@ -76,62 +71,32 @@ div[data-testid="stSelectbox"] label, label[data-testid="stWidgetLabel"] { color
 """, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
-# STEP 1 — DOWNLOAD ZIP FROM GOOGLE DRIVE
+# STEP 1 — DOWNLOAD ZIP FROM GOOGLE DRIVE USING GDOWN
 # ════════════════════════════════════════════════════════════════
 
 def download_from_gdrive(file_id: str, dest_path: str, label: str) -> bool:
     """
-    Download a file from Google Drive using file ID.
-    Handles the virus-scan warning page for large files.
+    Download file from Google Drive using gdown.
+    gdown handles large file confirmation pages automatically.
     """
-    URL = "https://drive.google.com/uc"
-
     try:
-        # First request — may return a confirmation page for large files
-        session  = requests.Session()
-        response = session.get(URL, params={"id": file_id, "export": "download"}, stream=True)
+        os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
+        url = f"https://drive.google.com/uc?id={file_id}"
+        gdown.download(url, dest_path, quiet=True, fuzzy=True)
 
-        # Check if Google shows a confirm page (large file warning)
-        token = None
-        for key, value in response.cookies.items():
-            if key.startswith("download_warning"):
-                token = value
-                break
+        # Verify file downloaded correctly
+        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 1000:
+            size_mb = os.path.getsize(dest_path) / (1024 * 1024)
+            return True
 
-        # Also check response content for confirmation token
-        if token is None:
-            content_start = b""
-            for chunk in response.iter_content(1024):
-                content_start += chunk
-                if len(content_start) > 10000:
-                    break
-            match = re.search(rb'confirm=([0-9A-Za-z_\-]+)', content_start)
-            if match:
-                token = match.group(1).decode()
+        # Try alternate URL format
+        url2 = f"https://drive.google.com/file/d/{file_id}/view"
+        gdown.download(url2, dest_path, quiet=True, fuzzy=True)
 
-        # Second request with confirmation token if needed
-        if token:
-            response = session.get(
-                URL,
-                params={"id": file_id, "export": "download", "confirm": token},
-                stream=True,
-            )
+        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 1000:
+            return True
 
-        # Write file
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        total = 0
-        with open(dest_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=32768):
-                if chunk:
-                    f.write(chunk)
-                    total += len(chunk)
-
-        size_mb = total / (1024 * 1024)
-        if total < 1000:
-            os.remove(dest_path)
-            return False
-
-        return True
+        return False
 
     except Exception as e:
         return False
@@ -142,30 +107,30 @@ def download_from_gdrive(file_id: str, dest_path: str, label: str) -> bool:
 # ════════════════════════════════════════════════════════════════
 
 def extract_zip(zip_path: str, extract_to: str, subject: str) -> list:
-    """
-    Extract ZIP and return list of (pdf_path, subject) tuples.
-    """
+    """Extract ZIP and return list of (pdf_path, subject, filename)."""
     extracted = []
     try:
         with zipfile.ZipFile(zip_path, 'r') as z:
             for name in z.namelist():
-                if name.lower().endswith(".pdf") and not name.startswith("__"):
-                    # Clean filename
-                    clean_name = os.path.basename(name)
-                    if not clean_name:
-                        continue
-                    out_path = os.path.join(extract_to, subject, clean_name)
-                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                    with z.open(name) as src, open(out_path, "wb") as dst:
-                        dst.write(src.read())
-                    extracted.append((out_path, subject, clean_name))
-    except Exception as e:
+                clean_name = os.path.basename(name)
+                if not clean_name.lower().endswith(".pdf") or not clean_name:
+                    continue
+                if clean_name.startswith("__") or clean_name.startswith("."):
+                    continue
+                out_path = os.path.join(extract_to, subject, clean_name)
+                os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                with z.open(name) as src, open(out_path, "wb") as dst:
+                    dst.write(src.read())
+                extracted.append((out_path, subject, clean_name))
+    except zipfile.BadZipFile:
+        pass
+    except Exception:
         pass
     return extracted
 
 
 # ════════════════════════════════════════════════════════════════
-# STEP 3 — EXTRACT TEXT FROM PDF
+# STEP 3 — PDF TEXT EXTRACTION
 # ════════════════════════════════════════════════════════════════
 
 def clean_text(text: str) -> str:
@@ -214,14 +179,13 @@ def chunk_text(text: str) -> list:
 # ════════════════════════════════════════════════════════════════
 
 def index_pdfs(col, pdf_list: list, progress_bar, status_text) -> int:
-    """Index list of (pdf_path, subject, filename) into ChromaDB."""
     total_chunks = 0
     total_pdfs   = len(pdf_list)
 
     for i, (pdf_path, subject, filename) in enumerate(pdf_list):
         chapter = os.path.splitext(filename)[0].upper()
         status_text.text(f"📖 Indexing: {filename} ({i+1}/{total_pdfs})")
-        progress_bar.progress(int((i / total_pdfs) * 90) + 5)
+        progress_bar.progress(int((i / max(total_pdfs, 1)) * 85) + 10)
 
         text, _ = extract_pdf_text(pdf_path)
         if not text.strip():
@@ -256,16 +220,11 @@ def index_pdfs(col, pdf_list: list, progress_bar, status_text) -> int:
 
 
 # ════════════════════════════════════════════════════════════════
-# MAIN SETUP — Download + Index (runs only once)
+# DATABASE SETUP
 # ════════════════════════════════════════════════════════════════
 
 @st.cache_resource
-def setup_database():
-    """
-    Full pipeline: Download ZIPs → Extract PDFs → Index into ChromaDB.
-    Cached by Streamlit — runs only once per deployment.
-    Returns (collection, status_message)
-    """
+def get_collection():
     ef     = ONNXMiniLM_L6_V2()
     client = chromadb.PersistentClient(path=CHROMA_DIR)
     col    = client.get_or_create_collection(
@@ -273,73 +232,82 @@ def setup_database():
         embedding_function=ef,
         metadata={"hnsw:space": "cosine"},
     )
-
-    # Already indexed — return immediately
-    if col.count() > 0:
-        return col, f"✅ Loaded {col.count():,} chunks from index"
-
-    return col, "needs_indexing"
+    return col
 
 
-col, status = setup_database()
+col = get_collection()
 
 # ════════════════════════════════════════════════════════════════
 # FIRST-TIME INDEXING UI
 # ════════════════════════════════════════════════════════════════
 
-if status == "needs_indexing":
-    st.markdown("## 🔄 First-time Setup")
-    st.info("Downloading and indexing your NCERT books. This runs **only once** — about 3-5 minutes.")
+if col.count() == 0:
+    st.markdown("""
+    <div style="background:linear-gradient(135deg,rgba(99,102,241,0.15),rgba(79,70,229,0.08));
+         border:1px solid rgba(99,102,241,0.25);border-radius:20px;padding:28px;margin-bottom:20px;">
+      <h2 style="margin:0 0 8px 0;">🔄 First-time Setup</h2>
+      <p style="color:#94a3b8;margin:0;">
+        Downloading your NCERT books from Google Drive and indexing them.
+        This runs <strong>only once</strong> — about 3–5 minutes.
+        After this the app loads instantly every time.
+      </p>
+    </div>
+    """, unsafe_allow_html=True)
 
     progress_bar = st.progress(0, text="Starting...")
     status_text  = st.empty()
-    log          = st.empty()
+    log_area     = st.container()
+    all_pdfs     = []
 
-    all_pdfs = []
     os.makedirs(PDF_DIR, exist_ok=True)
 
-    # Download and extract each ZIP
     for idx, (zip_name, (file_id, subject)) in enumerate(GDRIVE_FILES.items()):
+        pct = int((idx / 5) * 45)
+        progress_bar.progress(pct, text=f"⬇️ Downloading {zip_name}...")
         status_text.text(f"⬇️ Downloading {zip_name} ({idx+1}/5)...")
-        progress_bar.progress(int((idx / 5) * 40))
 
         zip_path = os.path.join(PDF_DIR, zip_name)
-
-        # Download
-        success = download_from_gdrive(file_id, zip_path, zip_name)
+        success  = download_from_gdrive(file_id, zip_path, zip_name)
 
         if not success:
-            log.warning(f"⚠️ Could not download {zip_name} — skipping")
+            log_area.warning(f"⚠️ Could not download {zip_name} — skipping")
             continue
 
-        # Extract
+        # Extract PDFs
         status_text.text(f"📦 Extracting {zip_name}...")
         pdfs = extract_zip(zip_path, PDF_DIR, subject)
         all_pdfs.extend(pdfs)
-        log.success(f"✅ {zip_name} → {len(pdfs)} PDFs extracted")
+        log_area.success(f"✅ {zip_name} → {len(pdfs)} PDFs extracted")
 
-        # Remove ZIP to save space
+        # Delete ZIP to save disk space
         try:
             os.remove(zip_path)
         except Exception:
             pass
 
     if not all_pdfs:
-        st.error("❌ No PDFs could be downloaded. Check that your Google Drive files are publicly shared.")
+        st.error("❌ No PDFs could be downloaded.")
+        st.markdown("""
+        **How to fix:**
+        1. Open your Google Drive folder
+        2. Right-click each ZIP → **Share** → **Anyone with the link** → **Viewer**
+        3. Make sure sharing is set to public
+        4. Reboot the app from Streamlit Cloud
+        """)
         st.stop()
 
     # Index all PDFs
-    status_text.text("🧠 Indexing all PDFs into database...")
+    status_text.text(f"🧠 Indexing {len(all_pdfs)} PDFs into vector database...")
     total = index_pdfs(col, all_pdfs, progress_bar, status_text)
 
-    progress_bar.progress(100, text=f"✅ Done! Indexed {total:,} chunks.")
-    status_text.text(f"✅ Setup complete! Indexed {total:,} chunks from {len(all_pdfs)} PDFs.")
+    progress_bar.progress(100, text=f"✅ Done! {total:,} chunks indexed.")
+    status_text.empty()
 
     if total > 0:
-        st.success(f"🎉 All done! {total:,} chunks indexed. Loading app...")
+        st.success(f"🎉 Setup complete! {total:,} chunks indexed from {len(all_pdfs)} PDFs. Loading app now...")
         st.rerun()
     else:
-        st.error("Indexing failed. No chunks were created.")
+        st.error("❌ Indexing failed — no chunks were created from the PDFs.")
         st.stop()
 
 # ════════════════════════════════════════════════════════════════
@@ -432,7 +400,8 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 if groq_client is None:
-    st.error("❌ GROQ_API_KEY not set. Go to Streamlit Cloud → App Settings → Secrets.")
+    st.error("❌ GROQ_API_KEY not set.")
+    st.markdown("Go to **Streamlit Cloud → App Settings → Secrets** and add:")
     st.code('GROQ_API_KEY = "your_key_here"')
     st.stop()
 
@@ -441,7 +410,6 @@ if groq_client is None:
 # ════════════════════════════════════════════════════════════════
 
 def retrieve_chunks(query: str, subject: str, top_k: int = 6) -> list:
-    """Vector search using ChromaDB ONNX embeddings."""
     try:
         kwargs = dict(
             query_texts=[query],
