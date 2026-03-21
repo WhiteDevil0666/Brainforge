@@ -1,10 +1,11 @@
 # ================================================================
-# BrainForge — NCERT Chat (Fixed for Streamlit Cloud)
+# BrainForge — NCERT Chat (Streamlit Cloud Fixed)
 # ================================================================
 
 import os
 import streamlit as st
 import chromadb
+from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 from groq import Groq
 
@@ -12,18 +13,11 @@ from groq import Groq
 # CONFIG
 # ════════════════════════════════════════════════════════════════
 
-CHROMA_DIR      = "."               # files are in root folder
+CHROMA_DIR      = "."
 COLLECTION_NAME = "ncert_class8"
 GROQ_MODEL      = "llama-3.1-8b-instant"
 
-SUBJECTS = [
-    "All Subjects",
-    "Mathematics",
-    "Science",
-    "History",
-    "Geography",
-    "Civics",
-]
+SUBJECTS = ["All Subjects", "Mathematics", "Science", "History", "Geography", "Civics"]
 
 SUBJECT_ICONS = {
     "Mathematics": "📐",
@@ -53,8 +47,7 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Inter:wght@400;500;600&display=swap');
 .stApp {
     background: linear-gradient(135deg, #0a0f1e 0%, #0f172a 50%, #0a1628 100%);
-    color: #ffffff;
-    font-family: 'Inter', sans-serif;
+    color: #ffffff; font-family: 'Inter', sans-serif;
 }
 h1,h2,h3,h4 { font-family: 'Sora', sans-serif !important; color: #ffffff !important; }
 section.main > div { background-color: transparent !important; }
@@ -65,87 +58,64 @@ section[data-testid="stSidebar"] {
 section[data-testid="stSidebar"] * { color: #ffffff !important; }
 div[data-testid="stChatMessage"] {
     background: rgba(255,255,255,0.04) !important;
-    border-radius: 14px !important;
-    padding: 14px !important;
-    border: 1px solid rgba(255,255,255,0.07);
-    margin-bottom: 8px;
+    border-radius: 14px !important; padding: 14px !important;
+    border: 1px solid rgba(255,255,255,0.07); margin-bottom: 8px;
 }
 div[data-testid="stChatMessage"] * { color: #f1f5f9 !important; }
 .stButton > button {
     background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-    color: white !important;
-    border-radius: 12px;
-    font-weight: 700;
-    border: none;
-    transition: all 0.2s ease;
-    box-shadow: 0 4px 15px rgba(99,102,241,0.3);
+    color: white !important; border-radius: 12px; font-weight: 700;
+    border: none; box-shadow: 0 4px 15px rgba(99,102,241,0.3);
 }
-.stButton > button:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 6px 20px rgba(99,102,241,0.4);
-}
-div[data-testid="stSelectbox"] label,
-label[data-testid="stWidgetLabel"] {
-    color: #e2e8f0 !important;
-    font-weight: 600 !important;
-    font-size: 0.88em !important;
+div[data-testid="stSelectbox"] label, label[data-testid="stWidgetLabel"] {
+    color: #e2e8f0 !important; font-weight: 600 !important; font-size: 0.88em !important;
 }
 .source-card {
     background: rgba(255,255,255,0.03);
-    border-radius: 0 10px 10px 0;
-    padding: 10px 14px;
-    margin-bottom: 8px;
+    border-radius: 0 10px 10px 0; padding: 10px 14px; margin-bottom: 8px;
 }
 .stat-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    background: rgba(99,102,241,0.12);
-    border: 1px solid rgba(99,102,241,0.25);
-    border-radius: 20px;
-    padding: 4px 12px;
-    font-size: 0.78em;
-    font-weight: 700;
-    color: #a5b4fc;
-    margin-right: 6px;
+    display: inline-flex; align-items: center; gap: 5px;
+    background: rgba(99,102,241,0.12); border: 1px solid rgba(99,102,241,0.25);
+    border-radius: 20px; padding: 4px 12px; font-size: 0.78em;
+    font-weight: 700; color: #a5b4fc; margin-right: 6px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
-# LOAD RESOURCES
+# LOAD RESOURCES — KEY FIX: no custom Settings, use get_or_create
 # ════════════════════════════════════════════════════════════════
 
-@st.cache_resource(show_spinner="📚 Loading NCERT database...")
-def load_collection():
+@st.cache_resource
+def load_resources():
+    """Load ChromaDB + embedder in a single cached function to avoid conflicts."""
+    errors = []
+
+    # ── ChromaDB ──────────────────────────────────────────────
+    collection = None
     try:
-        # Use HttpClient-free persistent client with settings
-        settings = chromadb.Settings(
-            anonymized_telemetry=False,
-            allow_reset=False,
-        )
-        client     = chromadb.PersistentClient(
-            path=CHROMA_DIR,
-            settings=settings,
-        )
-        collection = client.get_collection(name=COLLECTION_NAME)
-        return collection, client
+        # Use get_or_create to avoid "already exists" conflict
+        client     = chromadb.PersistentClient(path=CHROMA_DIR)
+        collection = client.get_or_create_collection(name=COLLECTION_NAME)
+        count      = collection.count()
+        if count == 0:
+            errors.append("Collection exists but is empty.")
     except Exception as e:
-        st.error(f"DB load error: {e}")
-        return None, None
+        errors.append(f"ChromaDB error: {e}")
 
-@st.cache_resource(show_spinner="🧠 Loading embedding model...")
-def load_embedder():
+    # ── Embedder ──────────────────────────────────────────────
+    embedder = None
     try:
-        return SentenceTransformer("all-MiniLM-L6-v2")
+        embedder = SentenceTransformer("all-MiniLM-L6-v2")
     except Exception as e:
-        st.error(f"Embedder error: {e}")
-        return None
+        errors.append(f"Embedder error: {e}")
 
-collection, chroma_client = load_collection()
-embedder = load_embedder()
+    return collection, embedder, errors
 
-# ── Groq client ───────────────────────────────────────────────
+collection, embedder, load_errors = load_resources()
+
+# ── Groq ──────────────────────────────────────────────────────
 api_key = os.getenv("GROQ_API_KEY", "")
 if not api_key:
     try:
@@ -184,23 +154,26 @@ selected_subject = st.sidebar.radio(
 st.sidebar.markdown("---")
 
 if collection:
-    total = collection.count()
-    st.sidebar.markdown("### 📊 Database Info")
-    st.sidebar.markdown(f"""
-    <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:12px 14px;">
-      <p style="margin:0 0 6px 0;font-size:0.78em;color:#94a3b8;">Your indexed NCERT books</p>
-      <p style="margin:0 0 8px 0;font-size:0.85em;font-weight:700;color:#a5b4fc;">📦 {total:,} chunks stored</p>
-      <p style="margin:0 0 4px 0;font-size:0.78em;color:#64748b;">📐 Mathematics</p>
-      <p style="margin:0 0 4px 0;font-size:0.78em;color:#64748b;">🔬 Science</p>
-      <p style="margin:0 0 4px 0;font-size:0.78em;color:#64748b;">🏛️ History</p>
-      <p style="margin:0 0 4px 0;font-size:0.78em;color:#64748b;">🌍 Geography</p>
-      <p style="margin:0;font-size:0.78em;color:#64748b;">⚖️ Civics</p>
-    </div>
-    """, unsafe_allow_html=True)
+    try:
+        total = collection.count()
+        st.sidebar.markdown("### 📊 Database Info")
+        st.sidebar.markdown(f"""
+        <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:12px 14px;">
+          <p style="margin:0 0 6px 0;font-size:0.78em;color:#94a3b8;">Your indexed NCERT books</p>
+          <p style="margin:0 0 8px 0;font-size:0.85em;font-weight:700;color:#a5b4fc;">📦 {total:,} chunks stored</p>
+          <p style="margin:0 0 3px 0;font-size:0.78em;color:#64748b;">📐 Mathematics</p>
+          <p style="margin:0 0 3px 0;font-size:0.78em;color:#64748b;">🔬 Science</p>
+          <p style="margin:0 0 3px 0;font-size:0.78em;color:#64748b;">🏛️ History</p>
+          <p style="margin:0 0 3px 0;font-size:0.78em;color:#64748b;">🌍 Geography</p>
+          <p style="margin:0;font-size:0.78em;color:#64748b;">⚖️ Civics</p>
+        </div>
+        """, unsafe_allow_html=True)
+    except Exception:
+        pass
 
 st.sidebar.markdown("---")
-show_sources  = st.sidebar.toggle("📄 Show Sources", value=True)
-answer_depth  = st.sidebar.selectbox(
+show_sources = st.sidebar.toggle("📄 Show Sources", value=True)
+answer_depth = st.sidebar.selectbox(
     "Answer Style",
     ["Simple (Class 8 level)", "Detailed", "Bullet Points", "With Examples"],
     index=0,
@@ -236,49 +209,47 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Error states ──────────────────────────────────────────────
+# ── Show any load errors as warnings (not blockers) ───────────
+for err in load_errors:
+    st.warning(f"⚠️ {err}")
+
+# ── Hard stops ────────────────────────────────────────────────
 if collection is None:
-    st.error("❌ NCERT database not found.")
+    st.error("❌ NCERT database not found. Make sure all ChromaDB files are in the repo root.")
     st.stop()
 if embedder is None:
-    st.error("❌ Embedding model failed to load.")
+    st.error("❌ Embedding model failed to load. Check requirements.txt includes sentence-transformers.")
     st.stop()
 if groq_client is None:
-    st.error("❌ GROQ_API_KEY not set. Add it in Streamlit Cloud → Settings → Secrets.")
+    st.error("❌ GROQ_API_KEY not set. Go to Streamlit Cloud → App Settings → Secrets and add it.")
+    st.code("GROQ_API_KEY = \"your_key_here\"")
     st.stop()
 
 # ════════════════════════════════════════════════════════════════
-# CORE FUNCTIONS
+# SEARCH + ANSWER FUNCTIONS
 # ════════════════════════════════════════════════════════════════
 
 def retrieve_chunks(query: str, subject: str, top_k: int = 5) -> list:
-    """
-    Search ChromaDB using raw embedding query.
-    Uses get() + manual similarity as fallback if query() fails.
-    """
+    """Search ChromaDB for relevant NCERT chunks."""
     try:
-        q_emb = embedder.encode(
-            [query], normalize_embeddings=True
-        ).tolist()[0]
-
-        # Build where clause only for specific subjects
-        where = {"subject": {"$eq": subject}} if subject != "All Subjects" else None
+        q_emb = embedder.encode([query], normalize_embeddings=True).tolist()[0]
 
         kwargs = dict(
             query_embeddings=[q_emb],
-            n_results=min(top_k, collection.count()),
+            n_results=min(top_k, max(collection.count(), 1)),
             include=["documents", "metadatas", "distances"],
         )
-        if where:
-            kwargs["where"] = where
 
-        results = collection.query(**kwargs)
+        # Only add where filter for specific subjects
+        if subject != "All Subjects":
+            kwargs["where"] = {"subject": {"$eq": subject}}
 
-        chunks    = []
+        results   = collection.query(**kwargs)
         docs      = results.get("documents", [[]])[0]
         metas     = results.get("metadatas",  [[]])[0]
         distances = results.get("distances",  [[]])[0]
 
+        chunks = []
         for doc, meta, dist in zip(docs, metas, distances):
             relevance = round((1 - float(dist)) * 100, 1)
             chunks.append({
@@ -291,34 +262,24 @@ def retrieve_chunks(query: str, subject: str, top_k: int = 5) -> list:
                 "relevance": relevance,
             })
 
-        # Filter low relevance and sort
         chunks = [c for c in chunks if c["relevance"] > 15]
         return sorted(chunks, key=lambda x: x["relevance"], reverse=True)
 
     except Exception as e:
-        # ── FALLBACK: use fulltext search via get() ───────────
+        # ── Keyword fallback ──────────────────────────────────
         try:
-            st.warning(f"Vector search failed ({e}), trying text search fallback...")
-
-            get_kwargs = dict(
-                include=["documents", "metadatas"],
-                limit=200,
-            )
+            get_kwargs = dict(include=["documents", "metadatas"], limit=300)
             if subject != "All Subjects":
                 get_kwargs["where"] = {"subject": {"$eq": subject}}
 
-            all_docs = collection.get(**get_kwargs)
-
-            docs  = all_docs.get("documents", [])
-            metas = all_docs.get("metadatas",  [])
-
-            # Simple keyword matching as fallback
+            all_data    = collection.get(**get_kwargs)
+            docs        = all_data.get("documents", [])
+            metas       = all_data.get("metadatas",  [])
             query_words = set(query.lower().split())
             scored      = []
 
             for doc, meta in zip(docs, metas):
-                doc_words = set(doc.lower().split())
-                overlap   = len(query_words & doc_words)
+                overlap = len(query_words & set(doc.lower().split()))
                 if overlap > 0:
                     scored.append({
                         "text":      doc,
@@ -327,72 +288,61 @@ def retrieve_chunks(query: str, subject: str, top_k: int = 5) -> list:
                         "page":      meta.get("page",         "?"),
                         "source":    meta.get("source",       "Unknown"),
                         "type":      meta.get("content_type", "theory"),
-                        "relevance": min(overlap * 10, 95),
+                        "relevance": min(overlap * 12, 90),
                     })
 
             scored.sort(key=lambda x: x["relevance"], reverse=True)
             return scored[:top_k]
 
         except Exception as e2:
-            st.error(f"Both search methods failed: {e2}")
+            st.error(f"Search failed: {e2}")
             return []
 
 
-def build_style_instruction(style: str) -> str:
-    if "Bullet" in style:
-        return "Format your answer as clear bullet points."
-    elif "Detailed" in style:
-        return "Give a detailed, thorough explanation with all relevant concepts covered."
-    elif "Examples" in style:
-        return "Explain with real-life examples and analogies a Class 8 student can relate to."
-    else:
-        return "Use simple, clear language suitable for a Class 8 student."
-
-
 def generate_answer(question: str, chunks: list, subject: str, style: str) -> str:
-    """Generate answer grounded in retrieved NCERT chunks."""
+    """Generate NCERT-grounded answer using Groq."""
     if not chunks:
-        return (
-            "I couldn't find relevant content in the NCERT books for this question. "
-            "Try selecting a specific subject from the sidebar, or rephrase your question."
-        )
+        return "I couldn't find relevant content for this question. Try selecting a specific subject or rephrasing."
 
     context = ""
     for i, c in enumerate(chunks[:4], 1):
         context += f"\n[Source {i}: {c['subject']} | {c['chapter']} | Page {c['page']}]\n{c['text']}\n"
 
-    style_instruction = build_style_instruction(style)
-    subject_line      = f"Subject: {subject}" if subject != "All Subjects" else "All Class 8 subjects"
+    style_map = {
+        "Bullet":   "Format your answer as clear bullet points.",
+        "Detailed": "Give a detailed, thorough explanation.",
+        "Examples": "Use real-life examples a Class 8 student can relate to.",
+    }
+    style_instr = next((v for k, v in style_map.items() if k in style),
+                       "Use simple, clear language for a Class 8 student.")
 
     prompt = f"""You are a friendly NCERT tutor for Class 8 students in India.
-Answer the student's question using ONLY the NCERT content provided below.
+Answer using ONLY the NCERT content provided.
 
-{subject_line}
-Student's question: {question}
+Subject: {subject}
+Question: {question}
 
 NCERT Content:
 {context}
 
-Instructions:
-- {style_instruction}
-- Use ONLY the content provided — do not add outside knowledge
-- For Maths: show steps clearly
-- For Science: explain the concept simply
-- Mention the chapter naturally in your answer
-- If the content does not fully answer the question, say so honestly
-- End with: "📚 From: [Subject] — [Chapter name]"
+Rules:
+- {style_instr}
+- Only use the content above — no outside knowledge
+- For Maths: show steps. For Science: explain simply.
+- If content doesn't fully answer, say so honestly.
+- End with: "📚 From: [Subject] — [Chapter]"
 """
 
     try:
-        response = groq_client.chat.completions.create(
+        resp = groq_client.chat.completions.create(
             model=GROQ_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=800,
         )
-        return response.choices[0].message.content.strip()
+        return resp.choices[0].message.content.strip()
     except Exception as e:
-        return f"Could not generate answer. Error: {e}"
+        return f"Answer generation failed: {e}"
 
 
 # ════════════════════════════════════════════════════════════════
@@ -448,7 +398,7 @@ SUGGESTIONS = {
 }
 
 # ════════════════════════════════════════════════════════════════
-# CHAT
+# CHAT UI
 # ════════════════════════════════════════════════════════════════
 
 if "messages" not in st.session_state:
@@ -456,14 +406,13 @@ if "messages" not in st.session_state:
 
 
 def render_sources(chunks: list):
-    """Render source cards for retrieved chunks."""
     with st.expander(f"📄 {len(chunks)} sources from your NCERT PDFs"):
         for chunk in chunks:
-            rel        = chunk["relevance"]
-            color      = "#22c55e" if rel >= 70 else "#f59e0b" if rel >= 45 else "#94a3b8"
-            subj_icon  = SUBJECT_ICONS.get(chunk["subject"], "📖")
+            rel       = chunk["relevance"]
+            color     = "#22c55e" if rel >= 70 else "#f59e0b" if rel >= 45 else "#94a3b8"
+            subj_icon = SUBJECT_ICONS.get(chunk["subject"], "📖")
             st.markdown(f"""
-            <div class="source-card" style="border-left: 3px solid {color};">
+            <div class="source-card" style="border-left:3px solid {color};">
               <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
                 <span style="font-weight:700;color:#a5b4fc;font-size:0.82em;">
                   {subj_icon} {chunk['subject']} — {chunk['chapter']}
@@ -480,21 +429,19 @@ def render_sources(chunks: list):
             """, unsafe_allow_html=True)
 
 
-def process_question(question: str):
-    """Retrieve chunks and generate answer for a question."""
+def process_question(q: str):
     with st.spinner("🔍 Searching your NCERT books..."):
-        chunks = retrieve_chunks(question, selected_subject, top_k=5)
-    with st.spinner("🤖 Generating answer from NCERT content..."):
-        answer = generate_answer(question, chunks, selected_subject, answer_depth)
+        chunks = retrieve_chunks(q, selected_subject)
+    with st.spinner("🤖 Generating answer..."):
+        answer = generate_answer(q, chunks, selected_subject, answer_depth)
     return answer, chunks
 
 
-# ── Suggestions (shown when chat is empty) ────────────────────
+# Suggestions when chat is empty
 if not st.session_state.messages:
-    st.markdown(f"### 💡 Ask something from {selected_subject}")
+    st.markdown(f"### 💡 Try asking:")
     suggestions = SUGGESTIONS.get(selected_subject, SUGGESTIONS["All Subjects"])
     cols        = st.columns(3)
-
     for i, sugg in enumerate(suggestions):
         with cols[i % 3]:
             if st.button(sugg, key=f"sugg_{i}", use_container_width=True):
@@ -504,14 +451,14 @@ if not st.session_state.messages:
                 st.rerun()
     st.markdown("")
 
-# ── Chat history ──────────────────────────────────────────────
+# Chat history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg["role"] == "assistant" and show_sources and msg.get("chunks"):
             render_sources(msg["chunks"])
 
-# ── Chat input ────────────────────────────────────────────────
+# Chat input
 placeholder = (
     f"Ask anything from Class 8 {selected_subject} NCERT..."
     if selected_subject != "All Subjects"
@@ -519,16 +466,13 @@ placeholder = (
 )
 
 question = st.chat_input(placeholder)
-
 if question:
     with st.chat_message("user"):
         st.markdown(question)
-
     with st.chat_message("assistant"):
         answer, chunks = process_question(question)
         st.markdown(answer)
         if show_sources and chunks:
             render_sources(chunks)
-
     st.session_state.messages.append({"role": "user",      "content": question, "chunks": []})
     st.session_state.messages.append({"role": "assistant", "content": answer,   "chunks": chunks})
