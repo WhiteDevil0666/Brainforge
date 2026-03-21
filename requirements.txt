@@ -1,6 +1,8 @@
 streamlit
 groq
-sentence-transformers==2.2.2
 chromadb==1.5.5
+sentence-transformers==3.0.1
 pymupdf
-numpy
+numpy==1.26.4
+torch==2.1.0
+transformers==4.40.0
