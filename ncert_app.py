@@ -28,7 +28,7 @@ from groq import Groq
 CHROMA_DIR      = "./ncert_db"
 COLLECTION_NAME = "ncert_class8"
 PDF_DIR         = "./ncert_pdfs"
-GROQ_MODEL      = "llama-3.1-8b-instant"
+GROQ_MODEL      = "llama-3.3-70b-versatile"   # upgraded for better answers
 CHUNK_SIZE      = 600
 CHUNK_OVERLAP   = 100
 
@@ -91,8 +91,6 @@ def download_from_gdrive(file_id: str, dest_path: str) -> bool:
 
 # ════════════════════════════════════════════════════════════════
 # EXTRACT ZIP
-# Subject is taken from GDRIVE_FILES mapping — NOT from filename
-# This ensures correct subject tagging regardless of PDF names
 # ════════════════════════════════════════════════════════════════
 
 def extract_zip(zip_path: str, extract_to: str, subject: str) -> list:
@@ -187,7 +185,7 @@ def index_pdfs(col, pdf_list: list, progress_bar, status_text) -> int:
             metadatas = [
                 {
                     "source":  filename,
-                    "subject": subject,   # from ZIP mapping — always correct
+                    "subject": subject,
                     "chapter": chapter,
                     "page":    c["page"],
                     "class":   "Class 8",
@@ -203,7 +201,7 @@ def index_pdfs(col, pdf_list: list, progress_bar, status_text) -> int:
     return total_chunks
 
 # ════════════════════════════════════════════════════════════════
-# DATABASE SETUP — force delete old wrong index, start fresh
+# DATABASE SETUP
 # ════════════════════════════════════════════════════════════════
 
 @st.cache_resource
@@ -211,7 +209,7 @@ def get_collection():
     ef     = ONNXMiniLM_L6_V2()
     client = chromadb.PersistentClient(path=CHROMA_DIR)
 
-    # Delete old collection to force fresh re-index with correct subjects
+    # Delete old collection to force fresh re-index
     try:
         client.delete_collection(COLLECTION_NAME)
     except Exception:
@@ -238,7 +236,7 @@ if col.count() == 0:
       <h2 style="margin:0 0 8px 0;">🔄 Setting Up NCERT Database</h2>
       <p style="color:#94a3b8;margin:0;">
         Downloading and indexing your NCERT books from Google Drive.
-        This runs <strong>only once</strong> — takes about 3–5 minutes.
+        This runs <strong>only once</strong> — about 3–5 minutes.
         After this the app loads instantly every time.
       </p>
     </div>
@@ -328,8 +326,10 @@ st.sidebar.markdown("""
 
 st.sidebar.markdown("### 📚 Filter by Subject")
 selected_subject = st.sidebar.radio(
-    "", SUBJECTS,
+    "Select Subject",
+    SUBJECTS,
     format_func=lambda x: f"{SUBJECT_ICONS.get(x,'📖')} {x}",
+    label_visibility="collapsed",
     key="subject_filter",
 )
 
@@ -440,35 +440,49 @@ def generate_answer(question: str, chunks: list, subject: str, style: str) -> st
         context += f"\n[Source {i}: {c['subject']} | {c['chapter']} | Page {c['page']}]\n{c['text']}\n"
 
     style_map = {
-        "Bullet":   "Format as clear bullet points.",
-        "Detailed": "Give a detailed thorough explanation.",
-        "Examples": "Use real-life examples a Class 8 student can relate to.",
+        "Bullet":   "Format the answer as clear numbered bullet points.",
+        "Detailed": "Give a detailed thorough explanation with all sub-points covered.",
+        "Examples": "Use real-life examples and analogies a Class 8 student can relate to.",
     }
     style_instr = next((v for k, v in style_map.items() if k in style),
-                       "Use simple clear language for a Class 8 student.")
+                       "Use simple clear language suitable for a Class 8 student.")
 
-    prompt = f"""You are a friendly NCERT tutor for Class 8 students in India.
-Answer using ONLY the NCERT content provided below.
+    # ── IMPROVED PROMPT — forces LLM to use available content ──
+    prompt = f"""You are a helpful NCERT tutor for Class 8 students in India.
+Your job is to answer the student's question using the NCERT content provided.
 
 Subject: {subject}
-Question: {question}
+Student's Question: {question}
 
-NCERT Content:
+NCERT Content Retrieved:
 {context}
 
-Rules:
-- {style_instr}
-- Only use the content above — no outside knowledge
-- For Maths: show steps clearly
-- For Science: explain simply
-- If content does not fully answer, say so honestly
-- End with: "📚 From: [Subject] — [Chapter]"
-"""
+STRICT RULES — follow all of these:
+1. READ all the NCERT content carefully before answering
+2. Extract EVERY relevant fact, definition, or explanation from the content
+3. Use the content to build a complete answer — even if it is partial or indirect
+4. If the content mentions related concepts, use them to explain
+5. {style_instr}
+6. For Maths: show steps clearly with examples
+7. For Science: explain the concept with simple language
+8. NEVER say "I don't have information" if ANY relevant content exists
+9. NEVER refuse to answer — always give the best answer from what is available
+10. At the end write: "📚 From: [Subject] — [Chapter name]"
+
+Now answer the question clearly and helpfully:"""
+
     try:
         resp = groq_client.chat.completions.create(
             model=GROQ_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3, max_tokens=800,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful Class 8 NCERT tutor. Always answer using the provided content. Never say you don't have information if content is available. Extract every relevant detail from the content."
+                },
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.2,
+            max_tokens=1000,
         )
         return resp.choices[0].message.content.strip()
     except Exception as e:
