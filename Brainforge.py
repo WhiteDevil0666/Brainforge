@@ -1,452 +1,554 @@
 # ================================================================
-# NCERT CHAT — BrainForge Integration
-# ----------------------------------------------------------------
-# HOW TO ADD THIS TO YOUR APP:
-#
-# 1. Copy this ENTIRE file's content
-# 2. Open your app.py
-# 3. Find this line in the sidebar section:
-#       page = st.sidebar.radio("", [
-#           "🏠 My Learning Journey",
-#           "📚 AI Study Tutor",
-#           "📝 Practice Test",
-#           "💬 Ask Your Tutor",
-#           "🎯 Study Copilot",
-#       ])
-#
-# 4. Add "📖 NCERT Chat" to that list:
-#       page = st.sidebar.radio("", [
-#           "🏠 My Learning Journey",
-#           "📚 AI Study Tutor",
-#           "📝 Practice Test",
-#           "💬 Ask Your Tutor",
-#           "🎯 Study Copilot",
-#           "📖 NCERT Chat",        ← ADD THIS LINE
-#       ])
-#
-# 5. Paste the code below at the END of your app.py
-#    (after the last elif block, before the final line)
+# BrainForge — NCERT Chat (Complete Standalone App)
+# ================================================================
+# SETUP:
+#   1. pip install streamlit chromadb sentence-transformers groq
+#   2. Place chroma_study_db/ folder next to this file
+#   3. Set your GROQ_API_KEY in .env or environment variable
+#   4. streamlit run ncert_app.py
 # ================================================================
 
+import os
+import re
+import streamlit as st
+import chromadb
+from sentence_transformers import SentenceTransformer
+from groq import Groq
 
-# ══════════════════════════════════════════════════════════════════════
-# ████████████  📖 NCERT CHAT  ████████████████████████████████████████
-# ══════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
+# CONFIG
+# ════════════════════════════════════════════════════════════════
 
-elif page == "📖 NCERT Chat":
+CHROMA_DIR       = "chroma_study_db"
+COLLECTION_NAME  = "ncert_class8"
+GROQ_MODEL       = "llama-3.1-8b-instant"
+GROQ_MODEL_LARGE = "llama-3.3-70b-versatile"
 
-    st.session_state.current_feature = "NCERT_Chat"
-    exam_cfg = EXAM_CONFIG[selected_exam]
+# Subjects detected from YOUR database
+SUBJECTS = [
+    "All Subjects",
+    "Mathematics",
+    "Science",
+    "History",
+    "Geography",
+    "Civics",
+]
 
-    # ── Header ────────────────────────────────────────────────
-    st.markdown(f"""
-    <h1 style="margin-bottom:4px;">📖 NCERT Chat</h1>
-    <p style="color:#64748b;margin:0 0 16px 0;">
-        Ask anything directly from your Class 8 NCERT books —
-        answers come from YOUR indexed PDFs, not the internet.
-    </p>
-    """, unsafe_allow_html=True)
+# Subject icons
+SUBJECT_ICONS = {
+    "Mathematics": "📐",
+    "Science":     "🔬",
+    "History":     "🏛️",
+    "Geography":   "🌍",
+    "Civics":      "⚖️",
+    "All Subjects":"📚",
+}
 
-    # ── Check ChromaDB is available ───────────────────────────
-    NCERT_COLLECTION = "ncert_class8"
-    NCERT_CHROMA_DIR = "chroma_study_db"
+# ════════════════════════════════════════════════════════════════
+# PAGE CONFIG
+# ════════════════════════════════════════════════════════════════
 
-    @st.cache_resource
-    def _get_ncert_collection():
-        """Load the indexed NCERT ChromaDB collection."""
-        try:
-            client     = chromadb.PersistentClient(path=NCERT_CHROMA_DIR)
-            collection = client.get_collection(name=NCERT_COLLECTION)
-            return collection
-        except Exception as e:
-            return None
+st.set_page_config(
+    page_title="BrainForge — NCERT Chat",
+    page_icon="🧠",
+    layout="wide",
+)
 
-    @st.cache_resource
-    def _get_ncert_embedder():
-        """Load the SentenceTransformer model for querying."""
-        try:
-            return SentenceTransformer("all-MiniLM-L6-v2")
-        except Exception:
-            return None
+# ════════════════════════════════════════════════════════════════
+# CSS
+# ════════════════════════════════════════════════════════════════
 
-    ncert_collection = _get_ncert_collection()
-    ncert_embedder   = _get_ncert_embedder()
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Inter:wght@400;500;600&display=swap');
 
-    # ── Show error if DB not found ────────────────────────────
-    if ncert_collection is None or ncert_embedder is None:
-        st.error("❌ NCERT database not found.")
-        st.markdown("""
-        <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);
-             border-radius:14px;padding:20px 24px;margin-top:12px;">
-          <p style="font-weight:700;color:#fca5a5;margin:0 0 8px 0;">How to fix this:</p>
-          <p style="color:#fca5a5;margin:0;">
-            1. Make sure <code>index_ncert.py</code> is in your BrainForge folder<br>
-            2. Run: <code>python index_ncert.py</code><br>
-            3. Wait for indexing to finish<br>
-            4. Restart the Streamlit app
-          </p>
-        </div>
-        """, unsafe_allow_html=True)
-        st.stop()
+.stApp {
+    background: linear-gradient(135deg, #0a0f1e 0%, #0f172a 50%, #0a1628 100%);
+    color: #ffffff;
+    font-family: 'Inter', sans-serif;
+}
+h1,h2,h3,h4 { font-family: 'Sora', sans-serif !important; color: #ffffff !important; }
+section.main > div { background-color: transparent !important; }
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #060d1a 0%, #0b1525 100%) !important;
+    border-right: 1px solid rgba(255,255,255,0.06);
+}
+section[data-testid="stSidebar"] * { color: #ffffff !important; }
 
-    # ── DB Stats ──────────────────────────────────────────────
-    total_chunks = ncert_collection.count()
+div[data-testid="stChatMessage"] {
+    background: rgba(255,255,255,0.04) !important;
+    border-radius: 14px !important;
+    padding: 14px !important;
+    border: 1px solid rgba(255,255,255,0.07);
+    margin-bottom: 8px;
+}
+div[data-testid="stChatMessage"] * { color: #f1f5f9 !important; }
 
-    st.markdown(f"""
-    <div style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);
-         border-radius:12px;padding:12px 18px;margin-bottom:16px;
-         display:flex;align-items:center;gap:10px;">
-      <span style="font-size:1.2em;">✅</span>
-      <span style="color:#86efac;font-weight:600;font-size:0.9em;">
-        NCERT database ready — {total_chunks:,} chunks indexed from your PDFs
-      </span>
+.stButton > button {
+    background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+    color: white !important;
+    border-radius: 12px;
+    font-weight: 700;
+    border: none;
+    transition: all 0.2s ease;
+    box-shadow: 0 4px 15px rgba(99,102,241,0.3);
+}
+.stButton > button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(99,102,241,0.4);
+}
+
+div[data-testid="stSelectbox"] label,
+div[data-testid="stTextInput"] label,
+label[data-testid="stWidgetLabel"] {
+    color: #e2e8f0 !important;
+    font-weight: 600 !important;
+    font-size: 0.88em !important;
+}
+
+code {
+    background: rgba(99,102,241,0.2) !important;
+    color: #a5b4fc !important;
+    padding: 3px 8px !important;
+    border-radius: 6px !important;
+}
+
+.source-card {
+    background: rgba(255,255,255,0.03);
+    border-radius: 0 10px 10px 0;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+}
+
+.stat-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(99,102,241,0.12);
+    border: 1px solid rgba(99,102,241,0.25);
+    border-radius: 20px;
+    padding: 4px 12px;
+    font-size: 0.78em;
+    font-weight: 700;
+    color: #a5b4fc;
+    margin-right: 6px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ════════════════════════════════════════════════════════════════
+# LOAD RESOURCES (cached — loads only once)
+# ════════════════════════════════════════════════════════════════
+
+@st.cache_resource(show_spinner="📚 Loading NCERT database...")
+def load_collection():
+    try:
+        client     = chromadb.PersistentClient(path=CHROMA_DIR)
+        collection = client.get_collection(name=COLLECTION_NAME)
+        return collection
+    except Exception as e:
+        return None
+
+@st.cache_resource(show_spinner="🧠 Loading AI model...")
+def load_embedder():
+    try:
+        return SentenceTransformer("all-MiniLM-L6-v2")
+    except Exception as e:
+        return None
+
+collection = load_collection()
+embedder   = load_embedder()
+
+# ── Groq client ───────────────────────────────────────────────
+api_key = os.getenv("GROQ_API_KEY", "")
+if not api_key:
+    # Try reading from .env manually
+    try:
+        with open(".env") as f:
+            for line in f:
+                if line.startswith("GROQ_API_KEY"):
+                    api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+
+groq_client = Groq(api_key=api_key) if api_key else None
+
+# ════════════════════════════════════════════════════════════════
+# SIDEBAR
+# ════════════════════════════════════════════════════════════════
+
+st.sidebar.markdown("""
+<div style="display:flex;align-items:center;gap:8px;padding:8px 0 16px 0;
+     border-bottom:1px solid rgba(255,255,255,0.06);">
+  <span style="font-size:1.5em;">🧠</span>
+  <div>
+    <div style="font-family:'Sora',sans-serif;font-weight:800;font-size:1.1em;">BrainForge</div>
+    <div style="color:#64748b;font-size:0.72em;">NCERT Class 8 Chat</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+st.sidebar.markdown("### 📚 Filter by Subject")
+selected_subject = st.sidebar.radio(
+    "",
+    SUBJECTS,
+    format_func=lambda x: f"{SUBJECT_ICONS.get(x, '📖')} {x}",
+    key="subject_filter",
+)
+
+st.sidebar.markdown("---")
+
+# DB Stats in sidebar
+if collection:
+    total = collection.count()
+    st.sidebar.markdown("### 📊 Database Info")
+    st.sidebar.markdown(f"""
+    <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:12px 14px;">
+      <p style="margin:0 0 6px 0;font-size:0.78em;color:#94a3b8;">Your indexed NCERT books</p>
+      <p style="margin:0 0 4px 0;font-size:0.85em;font-weight:700;color:#a5b4fc;">📦 {total:,} chunks stored</p>
+      <p style="margin:0 0 4px 0;font-size:0.78em;color:#64748b;">📐 Mathematics</p>
+      <p style="margin:0 0 4px 0;font-size:0.78em;color:#64748b;">🔬 Science</p>
+      <p style="margin:0 0 4px 0;font-size:0.78em;color:#64748b;">🏛️ History</p>
+      <p style="margin:0 0 4px 0;font-size:0.78em;color:#64748b;">🌍 Geography</p>
+      <p style="margin:0;font-size:0.78em;color:#64748b;">⚖️ Civics</p>
     </div>
     """, unsafe_allow_html=True)
 
-    # ── NCERT Retrieval Function ──────────────────────────────
-    def retrieve_from_ncert(query: str, subject_filter: str = None, top_k: int = 4) -> list:
-        """
-        Search ChromaDB for relevant NCERT chunks.
-        Returns list of dicts with text, subject, chapter, page, source.
-        """
-        try:
-            query_embedding = ncert_embedder.encode(
-                [query], normalize_embeddings=True
-            ).tolist()[0]
+st.sidebar.markdown("---")
+show_sources = st.sidebar.toggle("📄 Show Sources", value=True)
+answer_depth = st.sidebar.selectbox(
+    "Answer Style",
+    ["Simple (Class 8 level)", "Detailed", "Bullet Points", "With Examples"],
+    index=0,
+)
 
-            # Build filter
-            where = None
-            if subject_filter and subject_filter != "All Subjects":
-                where = {"subject": subject_filter}
+if st.sidebar.button("🗑️ Clear Chat", use_container_width=True):
+    st.session_state.messages = []
+    st.rerun()
 
-            # Query ChromaDB
-            results = ncert_collection.query(
-                query_embeddings=[query_embedding],
-                n_results=min(top_k, total_chunks),
-                where=where,
-                include=["documents", "metadatas", "distances"],
-            )
+# ════════════════════════════════════════════════════════════════
+# MAIN AREA
+# ════════════════════════════════════════════════════════════════
 
-            # Parse results
-            chunks = []
-            docs      = results.get("documents", [[]])[0]
-            metas     = results.get("metadatas",  [[]])[0]
-            distances = results.get("distances",  [[]])[0]
+# Header
+icon = SUBJECT_ICONS.get(selected_subject, "📚")
+st.markdown(f"""
+<div style="background:linear-gradient(135deg,rgba(99,102,241,0.15),rgba(79,70,229,0.08));
+     border:1px solid rgba(99,102,241,0.25);border-radius:20px;
+     padding:24px 28px;margin-bottom:20px;">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+    <span style="font-size:2em;">{icon}</span>
+    <div>
+      <h1 style="margin:0;font-size:1.6em;font-weight:800;">NCERT Chat</h1>
+      <p style="margin:0;color:#94a3b8;font-size:0.85em;">
+        Answers from your Class 8 NCERT books · No internet · Your PDFs only
+      </p>
+    </div>
+  </div>
+  <div style="margin-top:10px;">
+    <span class="stat-pill">📚 {selected_subject}</span>
+    <span class="stat-pill">🏠 Runs Locally</span>
+    <span class="stat-pill">📄 Page Citations</span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
-            for doc, meta, dist in zip(docs, metas, distances):
-                relevance = round((1 - dist) * 100, 1)  # cosine similarity to %
-                if relevance > 20:  # only include reasonably relevant chunks
-                    chunks.append({
-                        "text":      doc,
-                        "subject":   meta.get("subject",  "Unknown"),
-                        "chapter":   meta.get("chapter",  "Unknown"),
-                        "page":      meta.get("page",     "?"),
-                        "source":    meta.get("source",   "Unknown"),
-                        "type":      meta.get("content_type", "theory"),
-                        "relevance": relevance,
-                    })
+# ── Error states ──────────────────────────────────────────────
+if collection is None:
+    st.error("❌ NCERT database not found. Make sure `chroma_study_db/` is in the same folder as this file.")
+    st.stop()
 
-            return chunks
+if embedder is None:
+    st.error("❌ Could not load embedding model. Run: `pip install sentence-transformers`")
+    st.stop()
 
-        except Exception as e:
-            st.error(f"Retrieval error: {e}")
-            return []
+if groq_client is None:
+    st.error("❌ GROQ_API_KEY not found. Set it in your `.env` file or environment variables.")
+    st.info("Create a `.env` file with: `GROQ_API_KEY=your_key_here`")
+    st.stop()
+
+# ════════════════════════════════════════════════════════════════
+# CORE FUNCTIONS
+# ════════════════════════════════════════════════════════════════
+
+def retrieve_chunks(query: str, subject: str, top_k: int = 5) -> list:
+    """Search ChromaDB for relevant NCERT content."""
+    try:
+        q_emb = embedder.encode(
+            [query], normalize_embeddings=True
+        ).tolist()[0]
+
+        where = {"subject": subject} if subject != "All Subjects" else None
+
+        results = collection.query(
+            query_embeddings=[q_emb],
+            n_results=min(top_k, collection.count()),
+            where=where,
+            include=["documents", "metadatas", "distances"],
+        )
+
+        chunks = []
+        docs      = results.get("documents", [[]])[0]
+        metas     = results.get("metadatas",  [[]])[0]
+        distances = results.get("distances",  [[]])[0]
+
+        for doc, meta, dist in zip(docs, metas, distances):
+            relevance = round((1 - dist) * 100, 1)
+            if relevance > 15:
+                chunks.append({
+                    "text":      doc,
+                    "subject":   meta.get("subject",      "Unknown"),
+                    "chapter":   meta.get("chapter",      "Unknown"),
+                    "page":      meta.get("page",         "?"),
+                    "source":    meta.get("source",       "Unknown"),
+                    "folder":    meta.get("folder",       ""),
+                    "type":      meta.get("content_type", "theory"),
+                    "relevance": relevance,
+                })
+
+        return sorted(chunks, key=lambda x: x["relevance"], reverse=True)
+
+    except Exception as e:
+        st.error(f"Search error: {e}")
+        return []
 
 
-    def generate_ncert_answer(question: str, chunks: list, subject: str) -> str:
-        """
-        Send retrieved NCERT chunks + question to Groq LLM.
-        Answer is grounded in actual NCERT content.
-        """
-        if not chunks:
-            return "I couldn't find relevant content in the NCERT books for this question. Try rephrasing or selecting a different subject."
+def build_answer_instruction(style: str) -> str:
+    if "Bullet" in style:
+        return "Format your answer as clear bullet points."
+    elif "Detailed" in style:
+        return "Give a detailed, thorough explanation with all relevant concepts."
+    elif "Examples" in style:
+        return "Explain with real-life examples and analogies the student can relate to."
+    else:
+        return "Use simple, clear language suitable for a Class 8 student."
 
-        # Build context from retrieved chunks
-        context_parts = []
-        for i, c in enumerate(chunks, 1):
-            context_parts.append(
-                f"[Source {i}: {c['subject']} | {c['chapter']} | Page {c['page']}]\n{c['text']}"
-            )
-        context = "\n\n".join(context_parts)
 
-        subject_line = f"Subject filter: {subject}" if subject != "All Subjects" else "Searching across all subjects"
+def generate_answer(question: str, chunks: list, subject: str, style: str) -> str:
+    """Generate answer using Groq LLM grounded in NCERT content."""
+    if not chunks:
+        return (
+            "I couldn't find relevant content in the NCERT books for this question. "
+            "Try rephrasing your question or selecting a specific subject from the sidebar."
+        )
 
-        prompt = f"""You are a helpful NCERT tutor for Class 8 students.
+    # Build context
+    context = ""
+    for i, c in enumerate(chunks[:4], 1):
+        context += f"\n[Source {i}: {c['subject']} | {c['chapter']} | Page {c['page']}]\n{c['text']}\n"
+
+    style_instruction = build_answer_instruction(style)
+    subject_line      = f"Subject: {subject}" if subject != "All Subjects" else "Searching across all Class 8 subjects"
+
+    prompt = f"""You are a friendly NCERT tutor for Class 8 students in India.
 Answer the student's question using ONLY the NCERT content provided below.
 
 {subject_line}
 Student's question: {question}
 
-NCERT Content Retrieved:
+NCERT Content:
 {context}
 
 Instructions:
-- Answer clearly and in simple language suitable for Class 8
-- Use the NCERT content above as your primary source
-- If the content covers the answer, explain it step by step
-- Mention which chapter/subject the answer is from
-- If the retrieved content is not enough to fully answer, say so honestly
-- Do NOT make up information not present in the content
-- End with: "📚 Source: [Subject] — [Chapter]"
+- {style_instruction}
+- Use ONLY the content provided above — do not add outside knowledge
+- If the content is about Maths, show steps clearly
+- If the content is about Science, explain the concept simply
+- Mention the chapter or subject naturally in your answer
+- If the retrieved content does not fully answer the question, say so honestly
+- End with: "📚 From: [Subject] — [Chapter name]"
 """
-        return safe_llm_call(
-            MAIN_MODEL,
-            [{"role": "user", "content": prompt}],
+
+    try:
+        response = groq_client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-        ) or "Could not generate answer. Please try again."
-
-
-    # ── Available Subjects ────────────────────────────────────
-    NCERT_SUBJECTS = [
-        "All Subjects",
-        "Mathematics",
-        "Science",
-        "History",
-        "Geography",
-        "Civics",
-        "English",
-        "Hindi",
-    ]
-
-    # ── Session Init ──────────────────────────────────────────
-    if "ncert_messages"       not in st.session_state:
-        st.session_state.ncert_messages       = []
-    if "ncert_subject_filter" not in st.session_state:
-        st.session_state.ncert_subject_filter = "All Subjects"
-    if "ncert_show_sources"   not in st.session_state:
-        st.session_state.ncert_show_sources   = True
-
-    # ── Controls ──────────────────────────────────────────────
-    col_subj, col_toggle = st.columns([2, 1])
-
-    with col_subj:
-        selected_subject = st.selectbox(
-            "📚 Filter by Subject",
-            NCERT_SUBJECTS,
-            index=NCERT_SUBJECTS.index(st.session_state.ncert_subject_filter),
-            key="ncert_subject_select",
-            help="Select a subject to search only that book, or All Subjects to search everything"
+            max_tokens=800,
         )
-        st.session_state.ncert_subject_filter = selected_subject
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Could not generate answer: {e}"
 
-    with col_toggle:
-        st.markdown("<br>", unsafe_allow_html=True)
-        show_sources = st.toggle(
-            "Show Sources",
-            value=st.session_state.ncert_show_sources,
-            key="ncert_sources_toggle",
-            help="Show which page and chapter each answer came from"
-        )
-        st.session_state.ncert_show_sources = show_sources
+
+# ════════════════════════════════════════════════════════════════
+# SUGGESTED QUESTIONS
+# ════════════════════════════════════════════════════════════════
+
+SUGGESTIONS = {
+    "All Subjects": [
+        "What is photosynthesis?",
+        "What are rational numbers?",
+        "What were the causes of the 1857 revolt?",
+        "What is friction and its types?",
+        "What are natural resources?",
+        "What is the Parliament of India?",
+    ],
+    "Mathematics": [
+        "What are rational numbers?",
+        "Explain linear equations in one variable",
+        "What is the Pythagorean theorem?",
+        "How to find the area of a trapezium?",
+        "What are algebraic expressions?",
+        "Explain factorisation",
+    ],
+    "Science": [
+        "What is photosynthesis?",
+        "Explain the structure of a cell",
+        "What is friction?",
+        "How does sound travel?",
+        "What are microorganisms?",
+        "Explain force and pressure",
+    ],
+    "History": [
+        "What were the causes of the 1857 revolt?",
+        "Who was Tipu Sultan?",
+        "What was the impact of British rule on Indian trade?",
+        "Explain the role of the press in Indian nationalism",
+        "What was the tribal uprising?",
+    ],
+    "Geography": [
+        "What are natural resources?",
+        "Explain land use patterns in India",
+        "What is agriculture?",
+        "What are industries?",
+        "What is human resources?",
+    ],
+    "Civics": [
+        "What is the Indian Constitution?",
+        "Explain the role of Parliament",
+        "What are Fundamental Rights?",
+        "What is the judiciary?",
+        "Explain the concept of secularism",
+    ],
+}
+
+# ════════════════════════════════════════════════════════════════
+# CHAT SESSION
+# ════════════════════════════════════════════════════════════════
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Show suggestions only when chat is empty
+if not st.session_state.messages:
+    st.markdown(f"### 💡 Ask something from {selected_subject}")
+    suggestions = SUGGESTIONS.get(selected_subject, SUGGESTIONS["All Subjects"])
+
+    cols = st.columns(3)
+    for i, sugg in enumerate(suggestions):
+        with cols[i % 3]:
+            if st.button(sugg, key=f"sugg_{i}", use_container_width=True):
+                # Process suggestion as a question
+                with st.spinner("🔍 Searching NCERT books..."):
+                    chunks = retrieve_chunks(sugg, selected_subject)
+
+                with st.spinner("🤖 Generating answer..."):
+                    answer = generate_answer(sugg, chunks, selected_subject, answer_depth)
+
+                st.session_state.messages.append({
+                    "role": "user", "content": sugg, "chunks": []
+                })
+                st.session_state.messages.append({
+                    "role": "assistant", "content": answer, "chunks": chunks
+                })
+                st.rerun()
 
     st.markdown("")
 
-    # ── Suggested Questions ───────────────────────────────────
-    if not st.session_state.ncert_messages:
-        st.markdown("**💡 Try asking:**")
+# ── Render chat history ───────────────────────────────────────
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-        suggestions_map = {
-            "All Subjects": [
-                "What is photosynthesis?",
-                "Explain the Pythagorean theorem",
-                "What were the causes of the 1857 revolt?",
-                "What is a rational number?",
-            ],
-            "Mathematics": [
-                "What are rational numbers?",
-                "Explain linear equations in one variable",
-                "What is the Pythagorean theorem?",
-                "How do you find the area of a trapezium?",
-            ],
-            "Science": [
-                "What is photosynthesis?",
-                "Explain cell structure",
-                "What is friction?",
-                "How does sound travel?",
-            ],
-            "History": [
-                "What were the causes of the 1857 revolt?",
-                "Who was Tipu Sultan?",
-                "What was the colonial impact on Indian trade?",
-                "Explain the role of the press in Indian nationalism",
-            ],
-            "Geography": [
-                "What are natural resources?",
-                "Explain land use patterns",
-                "What is agriculture?",
-                "What are industries?",
-            ],
-            "Civics": [
-                "What is the Indian Constitution?",
-                "Explain the role of the Parliament",
-                "What is the judiciary?",
-                "What are Fundamental Rights?",
-            ],
-            "English": [
-                "Summarize the chapter Bepin Choudhury's Lapse of Memory",
-                "What is the theme of the poem The Last Bargain?",
-            ],
-            "Hindi": [
-                "ध्वनि कविता का सारांश बताइए",
-                "लाख की चूड़ियाँ पाठ का विषय क्या है?",
-            ],
-        }
+        # Sources expander for assistant messages
+        if msg["role"] == "assistant" and show_sources and msg.get("chunks"):
+            with st.expander(f"📄 {len(msg['chunks'])} sources from your NCERT PDFs"):
+                for chunk in msg["chunks"]:
+                    rel   = chunk["relevance"]
+                    color = "#22c55e" if rel >= 70 else "#f59e0b" if rel >= 45 else "#94a3b8"
+                    subj_icon = SUBJECT_ICONS.get(chunk['subject'], "📖")
 
-        suggestions = suggestions_map.get(selected_subject, suggestions_map["All Subjects"])
-        sugg_cols   = st.columns(2)
+                    st.markdown(f"""
+                    <div class="source-card" style="border-left: 3px solid {color};">
+                      <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                        <span style="font-weight:700;color:#a5b4fc;font-size:0.82em;">
+                          {subj_icon} {chunk['subject']} — {chunk['chapter']}
+                        </span>
+                        <span style="font-size:0.72em;color:{color};font-weight:700;">
+                          {rel}% match
+                        </span>
+                      </div>
+                      <div style="font-size:0.72em;color:#64748b;margin-bottom:6px;">
+                        📄 Page {chunk['page']}  ·  {chunk['source']}  ·  {chunk['type']}
+                      </div>
+                      <div style="color:#cbd5e1;font-size:0.82em;line-height:1.6;">
+                        {chunk['text'][:350]}{'...' if len(chunk['text']) > 350 else ''}
+                      </div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-        for i, sugg in enumerate(suggestions):
-            with sugg_cols[i % 2]:
-                if st.button(sugg, key=f"ncert_sugg_{i}", use_container_width=True):
-                    if not check_request_limit():
-                        st.stop()
+# ── Chat input ────────────────────────────────────────────────
+placeholder = (
+    f"Ask anything from Class 8 {selected_subject} NCERT..."
+    if selected_subject != "All Subjects"
+    else "Ask anything from Class 8 NCERT (Maths, Science, History, Geography, Civics)..."
+)
 
-                    with st.spinner("🔍 Searching your NCERT books..."):
-                        chunks = retrieve_from_ncert(
-                            sugg,
-                            subject_filter=selected_subject,
-                            top_k=4,
-                        )
+question = st.chat_input(placeholder)
 
-                    with st.spinner("🤖 Generating answer..."):
-                        answer = generate_ncert_answer(sugg, chunks, selected_subject)
+if question:
+    # Show user message
+    with st.chat_message("user"):
+        st.markdown(question)
 
-                    st.session_state.ncert_messages.append({
-                        "role":    "user",
-                        "content": sugg,
-                        "chunks":  [],
-                    })
-                    st.session_state.ncert_messages.append({
-                        "role":    "assistant",
-                        "content": answer,
-                        "chunks":  chunks,
-                    })
-                    st.rerun()
+    # Retrieve + Answer
+    with st.chat_message("assistant"):
+        with st.spinner("🔍 Searching your NCERT books..."):
+            chunks = retrieve_chunks(question, selected_subject, top_k=5)
 
-        st.markdown("")
-
-    # ── Chat History ──────────────────────────────────────────
-    for msg in st.session_state.ncert_messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-            # Show sources for assistant messages
-            if msg["role"] == "assistant" and show_sources and msg.get("chunks"):
-                with st.expander("📄 Sources from your NCERT PDFs", expanded=False):
-                    for i, chunk in enumerate(msg["chunks"], 1):
-                        relevance_color = (
-                            "#22c55e" if chunk["relevance"] >= 70
-                            else "#f59e0b" if chunk["relevance"] >= 45
-                            else "#94a3b8"
-                        )
-                        st.markdown(f"""
-                        <div style="background:rgba(255,255,255,0.03);
-                             border-left:3px solid {relevance_color};
-                             border-radius:0 10px 10px 0;
-                             padding:10px 14px;margin-bottom:8px;">
-                          <div style="display:flex;justify-content:space-between;
-                               align-items:center;margin-bottom:6px;">
-                            <span style="font-weight:700;color:#a5b4fc;font-size:0.82em;">
-                              📚 {chunk['subject']} — {chunk['chapter']}
-                            </span>
-                            <span style="font-size:0.72em;color:{relevance_color};font-weight:700;">
-                              {chunk['relevance']}% match
-                            </span>
-                          </div>
-                          <div style="font-size:0.72em;color:#64748b;margin-bottom:6px;">
-                            📄 Page {chunk['page']}  ·  {chunk['source']}  ·  {chunk['type']}
-                          </div>
-                          <div style="color:#cbd5e1;font-size:0.82em;line-height:1.6;">
-                            {chunk['text'][:300]}{'...' if len(chunk['text']) > 300 else ''}
-                          </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-    # ── Chat Input ────────────────────────────────────────────
-    user_question = st.chat_input(
-        f"Ask anything from Class 8 NCERT {'(' + selected_subject + ')' if selected_subject != 'All Subjects' else '(All Subjects)'}..."
-    )
-
-    if user_question:
-        if not check_request_limit():
-            st.stop()
-
-        # Show user message immediately
-        with st.chat_message("user"):
-            st.markdown(user_question)
-
-        # Retrieve from NCERT
-        with st.chat_message("assistant"):
-            with st.spinner("🔍 Searching your NCERT books..."):
-                chunks = retrieve_from_ncert(
-                    user_question,
-                    subject_filter=selected_subject,
-                    top_k=4,
-                )
-
+        if not chunks:
+            answer = (
+                "I couldn't find relevant content for this question. "
+                "Try selecting a specific subject from the sidebar, or rephrase your question."
+            )
+            st.markdown(answer)
+        else:
             with st.spinner("🤖 Generating answer from NCERT content..."):
-                answer = generate_ncert_answer(user_question, chunks, selected_subject)
+                answer = generate_answer(question, chunks, selected_subject, answer_depth)
 
             st.markdown(answer)
 
-            # Show sources inline
-            if show_sources and chunks:
-                with st.expander("📄 Sources from your NCERT PDFs", expanded=False):
-                    for i, chunk in enumerate(chunks, 1):
-                        relevance_color = (
-                            "#22c55e" if chunk["relevance"] >= 70
-                            else "#f59e0b" if chunk["relevance"] >= 45
-                            else "#94a3b8"
-                        )
+            if show_sources:
+                with st.expander(f"📄 {len(chunks)} sources from your NCERT PDFs"):
+                    for chunk in chunks:
+                        rel   = chunk["relevance"]
+                        color = "#22c55e" if rel >= 70 else "#f59e0b" if rel >= 45 else "#94a3b8"
+                        subj_icon = SUBJECT_ICONS.get(chunk['subject'], "📖")
+
                         st.markdown(f"""
-                        <div style="background:rgba(255,255,255,0.03);
-                             border-left:3px solid {relevance_color};
-                             border-radius:0 10px 10px 0;
-                             padding:10px 14px;margin-bottom:8px;">
-                          <div style="display:flex;justify-content:space-between;
-                               align-items:center;margin-bottom:6px;">
+                        <div class="source-card" style="border-left: 3px solid {color};">
+                          <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
                             <span style="font-weight:700;color:#a5b4fc;font-size:0.82em;">
-                              📚 {chunk['subject']} — {chunk['chapter']}
+                              {subj_icon} {chunk['subject']} — {chunk['chapter']}
                             </span>
-                            <span style="font-size:0.72em;color:{relevance_color};font-weight:700;">
-                              {chunk['relevance']}% match
+                            <span style="font-size:0.72em;color:{color};font-weight:700;">
+                              {rel}% match
                             </span>
                           </div>
                           <div style="font-size:0.72em;color:#64748b;margin-bottom:6px;">
                             📄 Page {chunk['page']}  ·  {chunk['source']}  ·  {chunk['type']}
                           </div>
                           <div style="color:#cbd5e1;font-size:0.82em;line-height:1.6;">
-                            {chunk['text'][:300]}{'...' if len(chunk['text']) > 300 else ''}
+                            {chunk['text'][:350]}{'...' if len(chunk['text']) > 350 else ''}
                           </div>
                         </div>
                         """, unsafe_allow_html=True)
 
-        # Save to session
-        st.session_state.ncert_messages.append({
-            "role":    "user",
-            "content": user_question,
-            "chunks":  [],
-        })
-        st.session_state.ncert_messages.append({
-            "role":    "assistant",
-            "content": answer,
-            "chunks":  chunks,
-        })
-        st.session_state.journey_step = max(st.session_state.get("journey_step", 0), 2)
-
-    # ── Footer Controls ───────────────────────────────────────
-    if st.session_state.ncert_messages:
-        st.markdown("")
-        st.divider()
-        col_clear, col_info = st.columns([1, 3])
-
-        with col_clear:
-            if st.button("🗑️ Clear Chat", use_container_width=True):
-                st.session_state.ncert_messages = []
-                st.rerun()
-
-        with col_info:
-            st.caption(
-                f"💡 Answers are generated from your {total_chunks:,} indexed NCERT chunks. "
-                f"Use subject filter for more precise answers."
-            )
+    # Save to history
+    st.session_state.messages.append({
+        "role": "user", "content": question, "chunks": []
+    })
+    st.session_state.messages.append({
+        "role": "assistant", "content": answer, "chunks": chunks
+    })
