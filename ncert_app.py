@@ -1,34 +1,50 @@
 # ================================================================
-# BrainForge — NCERT Chat
-# Self-indexing: reads PDFs directly, no sentence-transformers
-# Works on Python 3.14 + Streamlit Cloud
+# BrainForge — NCERT Chat (Complete Single File)
 # ================================================================
+# HOW IT WORKS:
+#   1. First run: downloads ZIPs from Google Drive
+#   2. Extracts PDFs from ZIPs
+#   3. Indexes all PDFs into ChromaDB (built-in embedder)
+#   4. Every run after: loads instantly from saved index
+#
 # requirements.txt:
 #   streamlit
 #   groq
 #   chromadb==1.5.5
 #   pymupdf
+#   requests
 # ================================================================
 
 import os
 import re
 import uuid
+import zipfile
+import requests
 import streamlit as st
 import chromadb
 from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
-import fitz   # PyMuPDF
+import fitz
 from groq import Groq
 
 # ════════════════════════════════════════════════════════════════
 # CONFIG
 # ════════════════════════════════════════════════════════════════
 
-CHROMA_DIR      = "./ncert_reindex_db"   # NEW separate DB folder
-COLLECTION_NAME = "ncert_class8_v2"      # new collection name
-PDF_FOLDER      = "."                    # PDFs uploaded to root
+CHROMA_DIR      = "./ncert_db"
+COLLECTION_NAME = "ncert_class8"
+PDF_DIR         = "./ncert_pdfs"
+GROQ_MODEL      = "llama-3.1-8b-instant"
 CHUNK_SIZE      = 600
 CHUNK_OVERLAP   = 100
-GROQ_MODEL      = "llama-3.1-8b-instant"
+
+# Google Drive ZIP file IDs
+GDRIVE_FILES = {
+    "Maths.zip":          ("1ABT9Fu0Dmmi9AnhqECunbo9ehTt_5Lvk", "Mathematics"),
+    "Science.zip":        ("1EUcfrL8JeTz3zkuPHggxHj-dcCOrtgzN", "Science"),
+    "SocialScience1.zip": ("1VLSSrQxa9ljQjv2OZ5xjLM49jK5lh9bf", "History"),
+    "SocialScience2.zip": ("1-hXrpg7sSmm3Cvf8QhQ4bIfOsVIkwJ7c", "Geography"),
+    "SocialScience3.zip": ("1DI_r-mEgh3uFnAtqDzuztA46tSgNRjcX", "Civics"),
+}
 
 SUBJECTS = ["All Subjects", "Mathematics", "Science", "History", "Geography", "Civics"]
 SUBJECT_ICONS = {
@@ -36,28 +52,8 @@ SUBJECT_ICONS = {
     "Geography": "🌍", "Civics": "⚖️", "All Subjects": "📚",
 }
 
-# Subject detection from filename
-SUBJECT_MAP = {
-    "hemh": "Mathematics",   # hemh101.pdf etc = Maths
-    "hesc": "Science",        # hesc101.pdf etc = Science
-    "hess2": "History",       # hess201.pdf etc = History
-    "hess3": "Geography",     # hess301.pdf etc = Geography
-    "hess4": "Civics",        # hess401.pdf etc = Civics
-}
-
-def detect_subject(filename: str) -> str:
-    name = filename.lower()
-    if name.startswith("hemh"):   return "Mathematics"
-    if name.startswith("hesc"):   return "Science"
-    if name.startswith("hess2"):  return "History"
-    if name.startswith("hess3"):  return "Geography"
-    if name.startswith("hess4"):  return "Civics"
-    if "math" in name:            return "Mathematics"
-    if "science" in name:         return "Science"
-    return "General"
-
 # ════════════════════════════════════════════════════════════════
-# PAGE CONFIG
+# PAGE CONFIG + CSS
 # ════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BrainForge — NCERT Chat", page_icon="🧠", layout="wide")
@@ -65,7 +61,7 @@ st.set_page_config(page_title="BrainForge — NCERT Chat", page_icon="🧠", lay
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Inter:wght@400;500;600&display=swap');
-.stApp { background: linear-gradient(135deg,#0a0f1e,#0f172a,#0a1628); color:#fff; font-family:'Inter',sans-serif; }
+.stApp { background:linear-gradient(135deg,#0a0f1e,#0f172a,#0a1628); color:#fff; font-family:'Inter',sans-serif; }
 h1,h2,h3,h4 { font-family:'Sora',sans-serif !important; color:#fff !important; }
 section.main > div { background-color:transparent !important; }
 section[data-testid="stSidebar"] { background:linear-gradient(180deg,#060d1a,#0b1525) !important; border-right:1px solid rgba(255,255,255,0.06); }
@@ -80,7 +76,96 @@ div[data-testid="stSelectbox"] label, label[data-testid="stWidgetLabel"] { color
 """, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
-# PDF PROCESSING FUNCTIONS
+# STEP 1 — DOWNLOAD ZIP FROM GOOGLE DRIVE
+# ════════════════════════════════════════════════════════════════
+
+def download_from_gdrive(file_id: str, dest_path: str, label: str) -> bool:
+    """
+    Download a file from Google Drive using file ID.
+    Handles the virus-scan warning page for large files.
+    """
+    URL = "https://drive.google.com/uc"
+
+    try:
+        # First request — may return a confirmation page for large files
+        session  = requests.Session()
+        response = session.get(URL, params={"id": file_id, "export": "download"}, stream=True)
+
+        # Check if Google shows a confirm page (large file warning)
+        token = None
+        for key, value in response.cookies.items():
+            if key.startswith("download_warning"):
+                token = value
+                break
+
+        # Also check response content for confirmation token
+        if token is None:
+            content_start = b""
+            for chunk in response.iter_content(1024):
+                content_start += chunk
+                if len(content_start) > 10000:
+                    break
+            match = re.search(rb'confirm=([0-9A-Za-z_\-]+)', content_start)
+            if match:
+                token = match.group(1).decode()
+
+        # Second request with confirmation token if needed
+        if token:
+            response = session.get(
+                URL,
+                params={"id": file_id, "export": "download", "confirm": token},
+                stream=True,
+            )
+
+        # Write file
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        total = 0
+        with open(dest_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=32768):
+                if chunk:
+                    f.write(chunk)
+                    total += len(chunk)
+
+        size_mb = total / (1024 * 1024)
+        if total < 1000:
+            os.remove(dest_path)
+            return False
+
+        return True
+
+    except Exception as e:
+        return False
+
+
+# ════════════════════════════════════════════════════════════════
+# STEP 2 — EXTRACT ZIP
+# ════════════════════════════════════════════════════════════════
+
+def extract_zip(zip_path: str, extract_to: str, subject: str) -> list:
+    """
+    Extract ZIP and return list of (pdf_path, subject) tuples.
+    """
+    extracted = []
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as z:
+            for name in z.namelist():
+                if name.lower().endswith(".pdf") and not name.startswith("__"):
+                    # Clean filename
+                    clean_name = os.path.basename(name)
+                    if not clean_name:
+                        continue
+                    out_path = os.path.join(extract_to, subject, clean_name)
+                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                    with z.open(name) as src, open(out_path, "wb") as dst:
+                        dst.write(src.read())
+                    extracted.append((out_path, subject, clean_name))
+    except Exception as e:
+        pass
+    return extracted
+
+
+# ════════════════════════════════════════════════════════════════
+# STEP 3 — EXTRACT TEXT FROM PDF
 # ════════════════════════════════════════════════════════════════
 
 def clean_text(text: str) -> str:
@@ -90,8 +175,9 @@ def clean_text(text: str) -> str:
     text = re.sub(r'\.{3,}', ' ', text)
     return re.sub(r'\s+', ' ', text).strip()
 
+
 def extract_pdf_text(pdf_path: str):
-    text = ""
+    text  = ""
     pages = 0
     try:
         doc   = fitz.open(pdf_path)
@@ -101,11 +187,12 @@ def extract_pdf_text(pdf_path: str):
             if raw.strip():
                 text += f"\n[Page {i+1}]\n{clean_text(raw)}"
         doc.close()
-    except Exception as e:
+    except Exception:
         pass
     return text, pages
 
-def chunk_text(text: str):
+
+def chunk_text(text: str) -> list:
     page_pat = re.compile(r'\[Page (\d+)\]')
     max_page = max((int(m.group(1)) for m in page_pat.finditer(text)), default=1)
     clean    = page_pat.sub('', text).strip()
@@ -121,50 +208,22 @@ def chunk_text(text: str):
         start += CHUNK_SIZE - CHUNK_OVERLAP
     return chunks
 
+
 # ════════════════════════════════════════════════════════════════
-# INDEXING — runs once, saves to CHROMA_DIR
+# STEP 4 — INDEX INTO CHROMADB
 # ════════════════════════════════════════════════════════════════
 
-@st.cache_resource
-def get_collection_and_ef():
-    """
-    Returns (collection, embedding_function).
-    Uses ChromaDB's built-in ONNX embedder — no torch needed.
-    """
-    ef     = ONNXMiniLM_L6_V2()
-    client = chromadb.PersistentClient(path=CHROMA_DIR)
-    col    = client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        embedding_function=ef,
-        metadata={"hnsw:space": "cosine"},
-    )
-    return col, ef
+def index_pdfs(col, pdf_list: list, progress_bar, status_text) -> int:
+    """Index list of (pdf_path, subject, filename) into ChromaDB."""
+    total_chunks = 0
+    total_pdfs   = len(pdf_list)
 
-def index_pdfs(col, ef):
-    """Index all NCERT PDFs in the root folder."""
-    pdf_files = [
-        f for f in os.listdir(PDF_FOLDER)
-        if f.lower().endswith(".pdf")
-    ]
-
-    if not pdf_files:
-        st.error("No PDF files found in the app folder.")
-        return 0
-
-    progress   = st.progress(0, text="Starting indexing...")
-    total_done = 0
-
-    for idx, filename in enumerate(sorted(pdf_files)):
-        progress.progress(
-            int((idx / len(pdf_files)) * 100),
-            text=f"📖 Indexing {filename} ({idx+1}/{len(pdf_files)})..."
-        )
-
-        subject = detect_subject(filename)
+    for i, (pdf_path, subject, filename) in enumerate(pdf_list):
         chapter = os.path.splitext(filename)[0].upper()
-        path    = os.path.join(PDF_FOLDER, filename)
-        text, _ = extract_pdf_text(path)
+        status_text.text(f"📖 Indexing: {filename} ({i+1}/{total_pdfs})")
+        progress_bar.progress(int((i / total_pdfs) * 90) + 5)
 
+        text, _ = extract_pdf_text(pdf_path)
         if not text.strip():
             continue
 
@@ -172,10 +231,9 @@ def index_pdfs(col, ef):
         if not chunks:
             continue
 
-        # Store in batches of 50
         BATCH = 50
-        for i in range(0, len(chunks), BATCH):
-            batch     = chunks[i:i+BATCH]
+        for j in range(0, len(chunks), BATCH):
+            batch     = chunks[j:j+BATCH]
             texts     = [c["text"] for c in batch]
             ids       = [str(uuid.uuid4()) for _ in batch]
             metadatas = [
@@ -188,34 +246,104 @@ def index_pdfs(col, ef):
                 }
                 for c in batch
             ]
-            col.add(documents=texts, ids=ids, metadatas=metadatas)
-            total_done += len(batch)
+            try:
+                col.add(documents=texts, ids=ids, metadatas=metadatas)
+                total_chunks += len(batch)
+            except Exception:
+                pass
 
-    progress.progress(100, text=f"✅ Indexed {total_done:,} chunks from {len(pdf_files)} PDFs!")
-    return total_done
+    return total_chunks
+
 
 # ════════════════════════════════════════════════════════════════
-# LOAD OR INDEX
+# MAIN SETUP — Download + Index (runs only once)
 # ════════════════════════════════════════════════════════════════
 
-col, ef = get_collection_and_ef()
+@st.cache_resource
+def setup_database():
+    """
+    Full pipeline: Download ZIPs → Extract PDFs → Index into ChromaDB.
+    Cached by Streamlit — runs only once per deployment.
+    Returns (collection, status_message)
+    """
+    ef     = ONNXMiniLM_L6_V2()
+    client = chromadb.PersistentClient(path=CHROMA_DIR)
+    col    = client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=ef,
+        metadata={"hnsw:space": "cosine"},
+    )
 
-# Check if already indexed
-already_indexed = col.count() > 0
+    # Already indexed — return immediately
+    if col.count() > 0:
+        return col, f"✅ Loaded {col.count():,} chunks from index"
 
-if not already_indexed:
-    st.markdown("## 🔄 First-time Setup: Indexing your NCERT PDFs...")
-    st.info("This runs only ONCE. After this, the app loads instantly every time.")
-    total = index_pdfs(col, ef)
+    return col, "needs_indexing"
+
+
+col, status = setup_database()
+
+# ════════════════════════════════════════════════════════════════
+# FIRST-TIME INDEXING UI
+# ════════════════════════════════════════════════════════════════
+
+if status == "needs_indexing":
+    st.markdown("## 🔄 First-time Setup")
+    st.info("Downloading and indexing your NCERT books. This runs **only once** — about 3-5 minutes.")
+
+    progress_bar = st.progress(0, text="Starting...")
+    status_text  = st.empty()
+    log          = st.empty()
+
+    all_pdfs = []
+    os.makedirs(PDF_DIR, exist_ok=True)
+
+    # Download and extract each ZIP
+    for idx, (zip_name, (file_id, subject)) in enumerate(GDRIVE_FILES.items()):
+        status_text.text(f"⬇️ Downloading {zip_name} ({idx+1}/5)...")
+        progress_bar.progress(int((idx / 5) * 40))
+
+        zip_path = os.path.join(PDF_DIR, zip_name)
+
+        # Download
+        success = download_from_gdrive(file_id, zip_path, zip_name)
+
+        if not success:
+            log.warning(f"⚠️ Could not download {zip_name} — skipping")
+            continue
+
+        # Extract
+        status_text.text(f"📦 Extracting {zip_name}...")
+        pdfs = extract_zip(zip_path, PDF_DIR, subject)
+        all_pdfs.extend(pdfs)
+        log.success(f"✅ {zip_name} → {len(pdfs)} PDFs extracted")
+
+        # Remove ZIP to save space
+        try:
+            os.remove(zip_path)
+        except Exception:
+            pass
+
+    if not all_pdfs:
+        st.error("❌ No PDFs could be downloaded. Check that your Google Drive files are publicly shared.")
+        st.stop()
+
+    # Index all PDFs
+    status_text.text("🧠 Indexing all PDFs into database...")
+    total = index_pdfs(col, all_pdfs, progress_bar, status_text)
+
+    progress_bar.progress(100, text=f"✅ Done! Indexed {total:,} chunks.")
+    status_text.text(f"✅ Setup complete! Indexed {total:,} chunks from {len(all_pdfs)} PDFs.")
+
     if total > 0:
-        st.success(f"✅ Done! Indexed {total:,} chunks. Reloading...")
+        st.success(f"🎉 All done! {total:,} chunks indexed. Loading app...")
         st.rerun()
     else:
-        st.error("No PDFs were indexed. Make sure PDF files are in the repo.")
+        st.error("Indexing failed. No chunks were created.")
         st.stop()
 
 # ════════════════════════════════════════════════════════════════
-# GROQ
+# GROQ CLIENT
 # ════════════════════════════════════════════════════════════════
 
 api_key = os.getenv("GROQ_API_KEY", "")
@@ -235,7 +363,8 @@ groq_client = Groq(api_key=api_key) if api_key else None
 # ════════════════════════════════════════════════════════════════
 
 st.sidebar.markdown("""
-<div style="display:flex;align-items:center;gap:8px;padding:8px 0 16px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+<div style="display:flex;align-items:center;gap:8px;padding:8px 0 16px 0;
+     border-bottom:1px solid rgba(255,255,255,0.06);">
   <span style="font-size:1.5em;">🧠</span>
   <div>
     <div style="font-family:'Sora',sans-serif;font-weight:800;font-size:1.1em;">BrainForge</div>
@@ -255,8 +384,8 @@ st.sidebar.markdown("---")
 total_chunks = col.count()
 st.sidebar.markdown(f"""
 <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:12px 14px;">
-  <p style="margin:0 0 6px 0;font-size:0.78em;color:#94a3b8;">NCERT Class 8 — Indexed</p>
-  <p style="margin:0 0 8px 0;font-size:0.85em;font-weight:700;color:#a5b4fc;">📦 {total_chunks:,} chunks</p>
+  <p style="margin:0 0 6px 0;font-size:0.78em;color:#94a3b8;">NCERT Class 8 — Ready</p>
+  <p style="margin:0 0 8px 0;font-size:0.85em;font-weight:700;color:#a5b4fc;">📦 {total_chunks:,} chunks indexed</p>
   <p style="margin:0 0 3px 0;font-size:0.78em;color:#64748b;">📐 Mathematics</p>
   <p style="margin:0 0 3px 0;font-size:0.78em;color:#64748b;">🔬 Science</p>
   <p style="margin:0 0 3px 0;font-size:0.78em;color:#64748b;">🏛️ History</p>
@@ -283,24 +412,27 @@ if st.sidebar.button("🗑️ Clear Chat", use_container_width=True):
 icon = SUBJECT_ICONS.get(selected_subject, "📚")
 st.markdown(f"""
 <div style="background:linear-gradient(135deg,rgba(99,102,241,0.15),rgba(79,70,229,0.08));
-     border:1px solid rgba(99,102,241,0.25);border-radius:20px;padding:24px 28px;margin-bottom:20px;">
+     border:1px solid rgba(99,102,241,0.25);border-radius:20px;
+     padding:24px 28px;margin-bottom:20px;">
   <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
     <span style="font-size:2em;">{icon}</span>
     <div>
       <h1 style="margin:0;font-size:1.6em;font-weight:800;">NCERT Chat</h1>
-      <p style="margin:0;color:#94a3b8;font-size:0.85em;">Answers from your Class 8 NCERT books · Your PDFs only</p>
+      <p style="margin:0;color:#94a3b8;font-size:0.85em;">
+        Answers from Class 8 NCERT books · Powered by your PDFs
+      </p>
     </div>
   </div>
   <div style="margin-top:10px;">
     <span class="stat-pill">{icon} {selected_subject}</span>
-    <span class="stat-pill">📄 Page Citations</span>
     <span class="stat-pill">📦 {total_chunks:,} chunks</span>
+    <span class="stat-pill">📄 Page Citations</span>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
 if groq_client is None:
-    st.error("❌ GROQ_API_KEY not set. Go to Streamlit Cloud → Settings → Secrets.")
+    st.error("❌ GROQ_API_KEY not set. Go to Streamlit Cloud → App Settings → Secrets.")
     st.code('GROQ_API_KEY = "your_key_here"')
     st.stop()
 
@@ -308,11 +440,11 @@ if groq_client is None:
 # SEARCH + ANSWER
 # ════════════════════════════════════════════════════════════════
 
-def retrieve_chunks(query: str, subject: str, top_k: int = 5) -> list:
-    """Vector search using ChromaDB's built-in ONNX embeddings."""
+def retrieve_chunks(query: str, subject: str, top_k: int = 6) -> list:
+    """Vector search using ChromaDB ONNX embeddings."""
     try:
         kwargs = dict(
-            query_texts=[query],   # ChromaDB embeds this automatically
+            query_texts=[query],
             n_results=min(top_k, max(col.count(), 1)),
             include=["documents", "metadatas", "distances"],
         )
@@ -338,7 +470,7 @@ def retrieve_chunks(query: str, subject: str, top_k: int = 5) -> list:
 
         return sorted(
             [c for c in chunks if c["relevance"] > 15],
-            key=lambda x: x["relevance"], reverse=True
+            key=lambda x: x["relevance"], reverse=True,
         )
 
     except Exception as e:
@@ -348,10 +480,10 @@ def retrieve_chunks(query: str, subject: str, top_k: int = 5) -> list:
 
 def generate_answer(question: str, chunks: list, subject: str, style: str) -> str:
     if not chunks:
-        return "I couldn't find relevant content. Try selecting a specific subject or rephrasing."
+        return "I couldn't find relevant content. Try selecting a specific subject or rephrasing your question."
 
     context = ""
-    for i, c in enumerate(chunks[:4], 1):
+    for i, c in enumerate(chunks[:6], 1):
         context += f"\n[Source {i}: {c['subject']} | {c['chapter']} | Page {c['page']}]\n{c['text']}\n"
 
     style_map = {
@@ -363,7 +495,7 @@ def generate_answer(question: str, chunks: list, subject: str, style: str) -> st
                        "Use simple clear language for a Class 8 student.")
 
     prompt = f"""You are a friendly NCERT tutor for Class 8 students in India.
-Answer using ONLY the NCERT content below.
+Answer using ONLY the NCERT content provided below.
 
 Subject: {subject}
 Question: {question}
@@ -373,9 +505,10 @@ NCERT Content:
 
 Rules:
 - {style_instr}
-- Only use content above — no outside knowledge
-- For Maths: show steps. For Science: explain simply.
-- If content doesn't fully answer, say so honestly.
+- Only use the content above — no outside knowledge
+- For Maths: show steps clearly
+- For Science: explain simply
+- If content doesn't fully answer, say so honestly
 - End with: "📚 From: [Subject] — [Chapter]"
 """
     try:
@@ -388,13 +521,14 @@ Rules:
     except Exception as e:
         return f"Answer generation failed: {e}"
 
+
 # ════════════════════════════════════════════════════════════════
 # SUGGESTED QUESTIONS
 # ════════════════════════════════════════════════════════════════
 
 SUGGESTIONS = {
     "All Subjects":  ["What is photosynthesis?", "What are rational numbers?", "What caused the 1857 revolt?", "What is friction?", "What are natural resources?", "What is Parliament?"],
-    "Mathematics":   ["What are rational numbers?", "Explain linear equations", "What is the Pythagorean theorem?", "Area of a trapezium?", "What are algebraic expressions?", "Explain factorisation"],
+    "Mathematics":   ["What are rational numbers?", "Explain linear equations", "What is Pythagorean theorem?", "Area of a trapezium?", "What are algebraic expressions?", "Explain factorisation"],
     "Science":       ["What is photosynthesis?", "Explain cell structure", "What is friction?", "How does sound travel?", "What are microorganisms?", "Explain force and pressure"],
     "History":       ["What caused the 1857 revolt?", "Who was Tipu Sultan?", "Impact of British rule on trade?", "Role of press in Indian nationalism?", "What was the tribal uprising?"],
     "Geography":     ["What are natural resources?", "Land use patterns in India?", "What is agriculture?", "What are industries?", "What is human resources?"],
@@ -407,6 +541,7 @@ SUGGESTIONS = {
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
 
 def render_sources(chunks):
     with st.expander(f"📄 {len(chunks)} sources from NCERT PDFs"):
@@ -429,6 +564,7 @@ def render_sources(chunks):
               </div>
             </div>""", unsafe_allow_html=True)
 
+
 def process_question(q):
     with st.spinner("🔍 Searching NCERT books..."):
         chunks = retrieve_chunks(q, selected_subject)
@@ -436,9 +572,10 @@ def process_question(q):
         answer = generate_answer(q, chunks, selected_subject, answer_depth)
     return answer, chunks
 
+
 # Suggestions
 if not st.session_state.messages:
-    st.markdown(f"### 💡 Try asking:")
+    st.markdown("### 💡 Try asking:")
     suggestions = SUGGESTIONS.get(selected_subject, SUGGESTIONS["All Subjects"])
     cols = st.columns(3)
     for i, sugg in enumerate(suggestions):
@@ -452,14 +589,14 @@ if not st.session_state.messages:
                 st.rerun()
     st.markdown("")
 
-# History
+# Chat history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg["role"] == "assistant" and show_sources and msg.get("chunks"):
             render_sources(msg["chunks"])
 
-# Input
+# Chat input
 question = st.chat_input(
     f"Ask anything from Class 8 {selected_subject} NCERT..."
     if selected_subject != "All Subjects"
