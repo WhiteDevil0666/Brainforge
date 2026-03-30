@@ -188,8 +188,7 @@ html, body, .stApp {
 /* ── Main container — bottom padding for pinned chat input (FIX 2) ── */
 .block-container {
   padding: 1rem 1.5rem 110px 1.5rem !important;
-  max-width: 920px !important;
-  margin: auto;
+  max-width: 100% !important;
 }
 
 /* ── Sidebar (FIX 3) ── */
@@ -282,7 +281,7 @@ div[data-testid="stChatInput"] {
   z-index: 1000 !important;
   background: linear-gradient(to top, #06070f 65%, transparent) !important;
   padding: 14px 24px 18px !important;
-  padding-left: calc(260px + 28px) !important;
+  padding-left: 28px !important;
 }
 div[data-testid="stChatInput"] textarea {
   background: #0d1117 !important;
