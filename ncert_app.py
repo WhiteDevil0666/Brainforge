@@ -184,17 +184,25 @@ html, body, .stApp {
   color: var(--text) !important;
   font-family: var(--font) !important;
 }
-#MainMenu, footer, header { visibility: hidden; }
 
-/* ── FIX 1a: Sidebar — fixed, always visible ── */
+/* Hide only what's safe — do NOT hide the sidebar collapse button */
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
+
+/* ── SIDEBAR: style only, never override width/display/position ── */
+/* Streamlit controls sidebar open/close via JS — we must not fight it */
 section[data-testid="stSidebar"] {
   background: #080b14 !important;
   border-right: 1px solid rgba(124,58,237,0.18) !important;
-  width: var(--sidebar-w) !important;
-  min-width: var(--sidebar-w) !important;
-  max-width: var(--sidebar-w) !important;
 }
-section[data-testid="stSidebar"] * {
+/* Sidebar content text */
+section[data-testid="stSidebar"] > div {
+  background: #080b14 !important;
+}
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] span,
+section[data-testid="stSidebar"] div {
   color: var(--text) !important;
   font-family: var(--font) !important;
 }
@@ -204,7 +212,19 @@ section[data-testid="stSidebar"] .stButton > button {
   color: #a78bfa !important;
 }
 
-/* ── FIX 1b: Main content — full width, no overlap ── */
+/* ── Sidebar collapse/expand toggle button — ALWAYS visible ── */
+button[data-testid="collapsedControl"],
+button[data-testid="baseButton-headerNoPadding"] {
+  display: flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  background: rgba(124,58,237,0.2) !important;
+  border: 1px solid rgba(124,58,237,0.4) !important;
+  border-radius: 8px !important;
+  color: #a78bfa !important;
+}
+
+/* ── Main content ── */
 .block-container {
   padding: 1rem 1.5rem 120px 1.5rem !important;
   max-width: 100% !important;
@@ -278,15 +298,16 @@ div[data-testid="stChatMessageContent"] { padding: 0 !important; }
   color: #f1f5f9 !important; font-family: var(--font) !important; margin: 10px 0 5px !important;
 }
 
-/* ── FIX 2: Chat input pinned to bottom — left starts AFTER sidebar ── */
+/* ── Chat input: pinned to bottom, width follows Streamlit's main column ── */
+/* Do NOT set left — that breaks the sidebar layout engine on Streamlit Cloud */
 div[data-testid="stChatInput"] {
   position: fixed !important;
   bottom: 0 !important;
-  left: var(--sidebar-w) !important;   /* KEY FIX: clears sidebar */
   right: 0 !important;
-  z-index: 1000 !important;
-  background: linear-gradient(to top, #06070f 65%, transparent) !important;
+  z-index: 999 !important;
+  background: linear-gradient(to top, #06070f 70%, transparent) !important;
   padding: 14px 32px 18px 32px !important;
+  width: auto !important;
 }
 div[data-testid="stChatInput"] textarea {
   background: #0d1117 !important;
@@ -389,11 +410,10 @@ details summary { color: var(--text) !important; font-family: var(--font) !impor
 .quiz-opt.correct   { border-color: var(--success) !important; background: rgba(16,185,129,0.1) !important; color: #6ee7b7 !important; }
 .quiz-opt.incorrect { border-color: var(--danger)  !important; background: rgba(239,68,68,0.1)  !important; color: #fca5a5 !important; }
 
-/* ── Mobile: sidebar collapses, input goes full-width ── */
+/* ── Mobile ── */
 @media (max-width: 768px) {
-  :root { --sidebar-w: 0px; }
   .block-container { padding: 0.5rem 0.75rem 120px 0.75rem !important; }
-  div[data-testid="stChatInput"] { left: 0 !important; padding: 14px 16px 18px !important; }
+  div[data-testid="stChatInput"] { padding: 14px 16px 18px !important; }
   .msg-user, .msg-bot { max-width: 96% !important; }
 }
 
