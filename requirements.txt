@@ -6,5 +6,5 @@ requests
 gdown
 supabase
 sentence-transformers
-
+resend
  
