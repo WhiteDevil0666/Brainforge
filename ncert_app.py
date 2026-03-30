@@ -1,10 +1,40 @@
 # ================================================================
 # BrainForge — NCERT Chat (Class 8, 9, 10 | Maths & Science)
-# FIXES APPLIED:
-#   1. Sidebar always visible — fixed CSS width + left offset
-#   2. Chat input pinned to bottom, left edge respects sidebar
-#   3. Resend OTP — "to" as plain string, "from" plain email
-#   4. Verbose OTP error logging for debugging
+# v2.0 — 4 NEW FEATURES:
+#   1. LaTeX / KaTeX math rendering (block + inline)
+#   2. Progress tracking per chapter (Supabase)
+#   3. Wrong answer review in Quiz tab
+#   4. Streak system (daily login flame)
+#
+# NEW SUPABASE TABLES REQUIRED — run in Supabase SQL editor:
+# ----------------------------------------------------------------
+# CREATE TABLE streaks (
+#   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+#   user_id uuid REFERENCES users(id),
+#   current_streak int DEFAULT 1,
+#   longest_streak int DEFAULT 1,
+#   last_login_date date,
+#   created_at timestamptz DEFAULT now()
+# );
+#
+# CREATE TABLE chapter_progress (
+#   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+#   user_id uuid REFERENCES users(id),
+#   class text, subject text, chapter_key text,
+#   first_visited date, last_visited date,
+#   visit_count int DEFAULT 1,
+#   created_at timestamptz DEFAULT now()
+# );
+#
+# CREATE TABLE quiz_attempts (
+#   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+#   user_id uuid REFERENCES users(id),
+#   topic text, question text, options jsonb,
+#   correct_answer text, user_answer text,
+#   explanation text, is_correct boolean,
+#   class text, subject text,
+#   created_at timestamptz DEFAULT now()
+# );
 # ================================================================
 
 import os, re, json, hashlib, datetime, random, string, resend
@@ -174,7 +204,6 @@ st.markdown("""
   --font:'Space Grotesk',sans-serif;
 }
 
-/* ───────── BASE ───────── */
 html, body, .stApp {
   background: var(--bg) !important;
   color: var(--text) !important;
@@ -183,13 +212,11 @@ html, body, .stApp {
 
 #MainMenu, footer { visibility:hidden; }
 
-/* ───────── HEADER (FIXED) ───────── */
 header[data-testid="stHeader"] {
   background: transparent !important;
   border-bottom: none !important;
 }
 
-/* Sidebar toggle ALWAYS visible */
 button[data-testid="collapsedControl"] {
   display: block !important;
   visibility: visible !important;
@@ -199,23 +226,18 @@ button[data-testid="collapsedControl"] {
   color: #a78bfa !important;
 }
 
-/* ───────── SIDEBAR ───────── */
 section[data-testid="stSidebar"] {
   background:#080b14 !important;
   border-right:1px solid rgba(124,58,237,0.18) !important;
 }
 
-section[data-testid="stSidebar"] * {
-  color: var(--text) !important;
-}
+section[data-testid="stSidebar"] * { color: var(--text) !important; }
 
-/* ───────── MAIN LAYOUT ───────── */
 .block-container {
   padding: 1rem 1.5rem 110px 1.5rem !important;
   max-width: 100% !important;
 }
 
-/* ───────── BUTTONS ───────── */
 .stButton > button {
   background: var(--accent) !important;
   color:#fff !important;
@@ -225,32 +247,18 @@ section[data-testid="stSidebar"] * {
   font-size:0.85rem !important;
   padding:0.5rem 1rem !important;
 }
+.stButton > button:hover { background:#6d28d9 !important; }
 
-.stButton > button:hover {
-  background:#6d28d9 !important;
-}
-
-/* ───────── INPUTS ───────── */
-.stTextInput input,
-textarea {
+.stTextInput input, textarea {
   background:var(--surface) !important;
   border:1px solid var(--border) !important;
   border-radius:10px !important;
   color:var(--text) !important;
 }
+textarea:focus, .stTextInput input:focus { border-color:var(--accent) !important; }
 
-textarea:focus,
-.stTextInput input:focus {
-  border-color:var(--accent) !important;
-}
+div[data-testid="stChatMessage"] { background: transparent !important; border: none !important; }
 
-/* ───────── CHAT MESSAGES ───────── */
-div[data-testid="stChatMessage"] {
-  background: transparent !important;
-  border: none !important;
-}
-
-/* USER */
 .msg-user {
   align-self:flex-end;
   background:rgba(124,58,237,0.2);
@@ -258,8 +266,6 @@ div[data-testid="stChatMessage"] {
   padding:10px 14px;
   max-width:80%;
 }
-
-/* BOT */
 .msg-bot {
   align-self:flex-start;
   background:rgba(255,255,255,0.04);
@@ -268,7 +274,6 @@ div[data-testid="stChatMessage"] {
   max-width:90%;
 }
 
-/* ───────── CHAT INPUT (FIXED PROPERLY) ───────── */
 div[data-testid="stChatInput"] {
   position: sticky !important;
   bottom: 0 !important;
@@ -276,8 +281,6 @@ div[data-testid="stChatInput"] {
   background: linear-gradient(to top, #06070f 70%, transparent) !important;
   padding: 14px 20px !important;
 }
-
-/* TEXTAREA */
 div[data-testid="stChatInput"] textarea {
   background:#0d1117 !important;
   border:1px solid rgba(124,58,237,0.4) !important;
@@ -287,24 +290,14 @@ div[data-testid="stChatInput"] textarea {
   padding:12px !important;
 }
 
-/* ───────── TABS ───────── */
 .stTabs [data-baseweb="tab-list"] {
   background:var(--surface) !important;
   border-radius:10px !important;
   padding:4px !important;
 }
+.stTabs [data-baseweb="tab"] { color:var(--muted) !important; font-weight:600 !important; }
+.stTabs [aria-selected="true"] { background:var(--accent) !important; color:#fff !important; }
 
-.stTabs [data-baseweb="tab"] {
-  color:var(--muted) !important;
-  font-weight:600 !important;
-}
-
-.stTabs [aria-selected="true"] {
-  background:var(--accent) !important;
-  color:#fff !important;
-}
-
-/* ───────── RADIO ───────── */
 .stRadio label {
   background:rgba(255,255,255,0.03) !important;
   border:1px solid var(--border) !important;
@@ -312,7 +305,6 @@ div[data-testid="stChatInput"] textarea {
   padding:6px 10px !important;
 }
 
-/* ───────── CARDS ───────── */
 .bf-card {
   background:var(--surface);
   border:1px solid var(--border);
@@ -320,7 +312,6 @@ div[data-testid="stChatInput"] textarea {
   padding:14px;
 }
 
-/* ───────── NOTES ───────── */
 .note-card {
   background:rgba(6,182,212,0.05);
   border:1px solid rgba(6,182,212,0.2);
@@ -328,37 +319,97 @@ div[data-testid="stChatInput"] textarea {
   padding:12px;
 }
 
-/* ───────── QUIZ ───────── */
 .quiz-opt {
   background:rgba(255,255,255,0.04);
   border:1px solid var(--border);
   border-radius:10px;
   padding:10px;
+  margin-bottom:6px;
+}
+.quiz-opt.correct { border-color:var(--success) !important; background:rgba(16,185,129,0.1); }
+.quiz-opt.incorrect { border-color:var(--danger) !important; background:rgba(239,68,68,0.1); }
+
+/* ── STREAK BADGE ── */
+.streak-badge {
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  background:linear-gradient(135deg,rgba(251,146,60,0.15),rgba(239,68,68,0.1));
+  border:1px solid rgba(251,146,60,0.3);
+  border-radius:10px;
+  padding:6px 12px;
+  margin:6px 0;
+}
+.streak-num { font-size:1.2rem; font-weight:800; color:#fb923c; }
+.streak-label { font-size:0.68rem; color:#94a3b8; font-weight:600; }
+
+/* ── PROGRESS BADGE ── */
+.ch-visited {
+  display:inline-block;
+  background:rgba(16,185,129,0.12);
+  border:1px solid rgba(16,185,129,0.3);
+  border-radius:6px;
+  padding:2px 7px;
+  font-size:0.62rem;
+  color:#10b981;
+  font-weight:700;
+  margin-left:6px;
+}
+.ch-new {
+  display:inline-block;
+  background:rgba(124,58,237,0.1);
+  border:1px solid rgba(124,58,237,0.25);
+  border-radius:6px;
+  padding:2px 7px;
+  font-size:0.62rem;
+  color:#a78bfa;
+  font-weight:600;
 }
 
-.quiz-opt.correct {
-  border-color:var(--success) !important;
-  background:rgba(16,185,129,0.1);
+/* ── WRONG ANSWER CARD ── */
+.wrong-card {
+  background:rgba(239,68,68,0.05);
+  border:1px solid rgba(239,68,68,0.2);
+  border-radius:12px;
+  padding:13px 16px;
+  margin-bottom:10px;
+}
+.wrong-card .wc-topic { font-size:0.66rem; color:#f87171; font-weight:700; margin-bottom:4px; }
+.wrong-card .wc-q    { font-size:0.86rem; color:#e2e8f0; font-weight:600; margin-bottom:6px; }
+.wrong-card .wc-ans  { font-size:0.78rem; margin-top:4px; }
+.wrong-card .wc-exp  {
+  font-size:0.76rem; color:#94a3b8; margin-top:8px;
+  padding-top:8px; border-top:1px solid rgba(255,255,255,0.06);
 }
 
-.quiz-opt.incorrect {
-  border-color:var(--danger) !important;
-  background:rgba(239,68,68,0.1);
-}
-
-/* ───────── MOBILE ───────── */
-@media (max-width:768px) {
-  .block-container {
-    padding:0.5rem 0.75rem 110px 0.75rem !important;
-  }
-}
-
-/* ───────── SCROLLBAR ───────── */
-::-webkit-scrollbar { width:4px; }
-::-webkit-scrollbar-thumb {
-  background:rgba(124,58,237,0.4);
+/* ── PROGRESS BAR ── */
+.prog-bar-wrap {
+  height:5px;
+  background:rgba(255,255,255,0.07);
   border-radius:99px;
+  overflow:hidden;
+  margin-top:4px;
 }
+.prog-bar { height:100%; border-radius:99px; transition:width 0.3s; }
+
+/* ── MATH BLOCK ── */
+.math-block {
+  background:rgba(124,58,237,0.06);
+  border:1px solid rgba(124,58,237,0.18);
+  border-radius:8px;
+  padding:10px 14px;
+  margin:8px 0;
+  overflow-x:auto;
+}
+
+div[data-testid="stChatInput"] { position: sticky !important; bottom: 0 !important; }
+
+@media (max-width:768px) {
+  .block-container { padding:0.5rem 0.75rem 110px 0.75rem !important; }
+}
+
+::-webkit-scrollbar { width:4px; }
+::-webkit-scrollbar-thumb { background:rgba(124,58,237,0.4); border-radius:99px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -400,7 +451,12 @@ def _init():
         "messages": [], "selected_chapter": None, "chapter_mode": False,
         "selected_class": "Class 8", "selected_subject": "Both",
         "quiz_state": None, "quiz_answered": False,
-        "quiz_last_pick": "", "usage": None,
+        "quiz_last_pick": "", "quiz_topic_last": "",
+        "usage": None,
+        # v2.0 new state
+        "streak": None,           # current streak int
+        "chapter_progress": None, # dict {ch_key: visit_count}
+        "streak_initialized": False,
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -453,11 +509,10 @@ def verify_otp(identifier, otp):
         return False
 
 # ════════════════════════════════════════════════════════════════
-# EMAIL OTP — FIX: plain string "to" + plain "from" + verbose errors
+# EMAIL OTP
 # ════════════════════════════════════════════════════════════════
 
 RESEND_API_KEY = _secret("RESEND_API_KEY")
-
 if not RESEND_API_KEY:
     st.error("Missing RESEND_API_KEY in secrets")
     st.stop()
@@ -465,16 +520,10 @@ if not RESEND_API_KEY:
 resend.api_key = RESEND_API_KEY
 
 def send_otp_email(to_email: str, otp: str) -> bool:
-    """
-    Send OTP email via Resend.
-    FIX 1: 'to' must be a plain string (not a list) for free-tier Resend accounts.
-    FIX 2: 'from' must be a plain email without a display name when using onboarding@resend.dev.
-    FIX 3: Print full error to server logs so it's visible in Streamlit Cloud.
-    """
     try:
         result = resend.Emails.send({
-            "from":    "onboarding@resend.dev",   # plain email, no display name
-            "to":      to_email.strip(),           # plain string, NOT a list
+            "from":    "onboarding@resend.dev",
+            "to":      to_email.strip(),
             "subject": "Your BrainForge OTP 🔐",
             "html": f"""
                 <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;
@@ -484,20 +533,14 @@ def send_otp_email(to_email: str, otp: str) -> bool:
                   <div style="font-size:44px;font-weight:900;color:#7c3aed;
                        letter-spacing:12px;margin:20px 0;text-align:center;">{otp}</div>
                   <p style="color:#64748b;font-size:13px;">
-                    Valid for {OTP_EXPIRY_MINUTES} minutes. Do not share this code with anyone.
-                  </p>
-                  <hr style="border:none;border-top:1px solid #1e293b;margin:24px 0;">
-                  <p style="color:#475569;font-size:11px;">
-                    If you didn't request this, you can safely ignore this email.
+                    Valid for {OTP_EXPIRY_MINUTES} minutes. Do not share this code.
                   </p>
                 </div>
             """,
         })
-        # Log result to server console (visible in Streamlit Cloud → Logs)
         print(f"[Resend OK] to={to_email} | result={result}")
         return True
     except Exception as e:
-        # Full error in both UI and server logs
         print(f"[Resend ERROR] to={to_email} | error={e}")
         st.error(f"❌ Email failed: {e}")
         return False
@@ -522,13 +565,8 @@ def render_auth():
         """, unsafe_allow_html=True)
         st.markdown("")
 
-        # ── INPUT STAGE ──
         if st.session_state.auth_stage == "input":
-            identifier = st.text_input(
-                "📧 Email address",
-                placeholder="you@example.com",
-                key="auth_id_input",
-            )
+            identifier = st.text_input("📧 Email address", placeholder="you@example.com", key="auth_id_input")
             if st.button("Send OTP →", type="primary", use_container_width=True):
                 valid, kind = _validate(identifier)
                 if not valid:
@@ -546,12 +584,10 @@ def render_auth():
                         st.session_state.auth_stage      = "otp"
                         st.rerun()
 
-        # ── OTP VERIFY STAGE ──
         elif st.session_state.auth_stage == "otp":
             ident = st.session_state.auth_identifier
             st.info(f"OTP sent to **{ident}** — check spam if not in inbox.")
-            otp_in = st.text_input("Enter 6-digit OTP", max_chars=6,
-                                   placeholder="······", key="otp_in")
+            otp_in = st.text_input("Enter 6-digit OTP", max_chars=6, placeholder="······", key="otp_in")
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("✅ Verify", type="primary", use_container_width=True):
@@ -574,20 +610,7 @@ def render_auth():
                         st.success("📩 New OTP sent!")
                     st.session_state.auth_otp_time = datetime.datetime.utcnow()
             if st.button("← Change email", use_container_width=True):
-                st.session_state.auth_stage = "input"
-                st.rerun()
-
-        # ── DEBUG expander (remove before going to production) ──
-        with st.expander("🔧 Debug: Test email delivery"):
-            test_addr = st.text_input("Send test OTP to:", key="dbg_email")
-            if st.button("📨 Send Test", key="dbg_send"):
-                if test_addr.strip():
-                    ok = send_otp_email(test_addr.strip(), "999888")
-                    if ok:
-                        st.success(f"Sent! Check {test_addr}. Code: 999888")
-                else:
-                    st.warning("Enter an email address above.")
-
+                st.session_state.auth_stage = "input"; st.rerun()
 
 if st.session_state.auth_stage != "done":
     render_auth()
@@ -626,6 +649,191 @@ def rate_limit_check():
         st.error(f"🚫 You've used all **{DAILY_LIMIT} daily questions**. Come back tomorrow! 🌅", icon="🚫")
         return False
     return True
+
+# ════════════════════════════════════════════════════════════════
+# ✨ FEATURE 1 — STREAK SYSTEM
+# ════════════════════════════════════════════════════════════════
+
+def update_streak() -> int:
+    """Update streak on login. Returns current streak count."""
+    try:
+        uid       = st.session_state.auth_user_id
+        today     = datetime.date.today().isoformat()
+        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        r = sb.table("streaks").select("*").eq("user_id", uid).execute()
+        if r.data:
+            row     = r.data[0]
+            last    = row.get("last_login_date", "")
+            streak  = row.get("current_streak", 0)
+            longest = row.get("longest_streak", 0)
+            if last == today:
+                return streak                    # already logged in today
+            elif last == yesterday:
+                streak += 1                      # consecutive day — extend streak
+            else:
+                streak = 1                       # streak broken — reset
+            longest = max(longest, streak)
+            sb.table("streaks").update({
+                "current_streak":  streak,
+                "longest_streak":  longest,
+                "last_login_date": today,
+            }).eq("user_id", uid).execute()
+            return streak
+        else:
+            sb.table("streaks").insert({
+                "user_id":          uid,
+                "current_streak":   1,
+                "longest_streak":   1,
+                "last_login_date":  today,
+            }).execute()
+            return 1
+    except Exception as e:
+        print(f"[Streak error] {e}")
+        return 0
+
+def get_streak_data() -> dict:
+    """Return full streak row for display."""
+    try:
+        uid = st.session_state.auth_user_id
+        r = sb.table("streaks").select("current_streak,longest_streak").eq("user_id", uid).execute()
+        if r.data:
+            return r.data[0]
+        return {"current_streak": 0, "longest_streak": 0}
+    except:
+        return {"current_streak": 0, "longest_streak": 0}
+
+# Run streak update once per session login
+if not st.session_state.streak_initialized and st.session_state.auth_user_id:
+    st.session_state.streak = update_streak()
+    st.session_state.streak_initialized = True
+
+# ════════════════════════════════════════════════════════════════
+# ✨ FEATURE 2 — CHAPTER PROGRESS TRACKING
+# ════════════════════════════════════════════════════════════════
+
+def mark_chapter_visited(ch_key: str, cls: str, subj: str):
+    """Upsert a chapter visit record for the current user."""
+    try:
+        uid   = st.session_state.auth_user_id
+        today = datetime.date.today().isoformat()
+        r = (sb.table("chapter_progress").select("id,visit_count")
+               .eq("user_id", uid).eq("chapter_key", ch_key).execute())
+        if r.data:
+            row = r.data[0]
+            sb.table("chapter_progress").update({
+                "last_visited": today,
+                "visit_count":  row["visit_count"] + 1,
+            }).eq("id", row["id"]).execute()
+        else:
+            sb.table("chapter_progress").insert({
+                "user_id":       uid,
+                "class":         cls,
+                "subject":       subj,
+                "chapter_key":   ch_key,
+                "first_visited": today,
+                "last_visited":  today,
+                "visit_count":   1,
+            }).execute()
+        # Invalidate cached progress
+        st.session_state.chapter_progress = None
+    except Exception as e:
+        print(f"[Progress error] {e}")
+
+def get_chapter_progress() -> dict:
+    """Return {chapter_key: visit_count} for the current user."""
+    if st.session_state.chapter_progress is not None:
+        return st.session_state.chapter_progress
+    try:
+        uid = st.session_state.auth_user_id
+        r = (sb.table("chapter_progress")
+               .select("chapter_key,visit_count")
+               .eq("user_id", uid).execute())
+        prog = {row["chapter_key"]: row["visit_count"] for row in (r.data or [])}
+        st.session_state.chapter_progress = prog
+        return prog
+    except:
+        return {}
+
+def get_class_progress_pct(cls: str) -> float:
+    """Return 0.0–1.0 fraction of chapters visited for this class."""
+    prog  = get_chapter_progress()
+    total = sum(len(v) for v in CHAPTER_INDEX.get(cls, {}).values())
+    if total == 0: return 0.0
+    done  = sum(1 for k in prog if any(
+        k in CHAPTER_INDEX[cls][s] for s in CHAPTER_INDEX.get(cls, {})
+    ))
+    return min(done / total, 1.0)
+
+# ════════════════════════════════════════════════════════════════
+# ✨ FEATURE 3 — QUIZ ATTEMPT TRACKING (wrong answer review)
+# ════════════════════════════════════════════════════════════════
+
+def save_quiz_attempt(topic: str, q_data: dict, user_answer: str, is_correct: bool):
+    """Persist a quiz attempt to Supabase."""
+    try:
+        uid = st.session_state.auth_user_id
+        sb.table("quiz_attempts").insert({
+            "user_id":       uid,
+            "topic":         topic,
+            "question":      q_data["question"],
+            "options":       json.dumps(q_data["options"]),
+            "correct_answer": q_data["correct"],
+            "user_answer":   user_answer,
+            "explanation":   q_data.get("explanation", ""),
+            "is_correct":    is_correct,
+            "class":         st.session_state.selected_class,
+            "subject":       st.session_state.selected_subject,
+        }).execute()
+    except Exception as e:
+        print(f"[Quiz attempt error] {e}")
+
+def get_wrong_answers(limit: int = 20) -> list:
+    """Return the most recent wrong quiz answers for this user."""
+    try:
+        uid = st.session_state.auth_user_id
+        r = (sb.table("quiz_attempts")
+               .select("topic,question,options,correct_answer,user_answer,explanation,class,subject,created_at")
+               .eq("user_id", uid).eq("is_correct", False)
+               .order("created_at", desc=True).limit(limit).execute())
+        return r.data or []
+    except:
+        return []
+
+def get_quiz_stats() -> tuple:
+    """Return (total_attempts, correct_count)."""
+    try:
+        uid = st.session_state.auth_user_id
+        r = sb.table("quiz_attempts").select("is_correct").eq("user_id", uid).execute()
+        data    = r.data or []
+        total   = len(data)
+        correct = sum(1 for d in data if d["is_correct"])
+        return total, correct
+    except:
+        return 0, 0
+
+# ════════════════════════════════════════════════════════════════
+# ✨ FEATURE 4 — LaTeX / MATH RENDERING
+# ════════════════════════════════════════════════════════════════
+
+def render_answer_with_math(text: str):
+    """
+    Render AI response with proper LaTeX support.
+    - $$...$$ blocks → st.latex() (display math)
+    - Remaining text  → st.markdown()
+    - Inline $...$ is preserved in markdown for KaTeX if loaded,
+      otherwise displayed as-is.
+    """
+    # Split on display-math blocks $$...$$
+    parts = re.split(r'(\$\$[\s\S]+?\$\$)', text)
+    for part in parts:
+        if part.startswith('$$') and part.endswith('$$') and len(part) > 4:
+            latex_code = part[2:-2].strip()
+            try:
+                st.latex(latex_code)
+            except Exception:
+                st.markdown(f"```\n{latex_code}\n```")
+        elif part.strip():
+            st.markdown(part)
 
 # ════════════════════════════════════════════════════════════════
 # VECTOR SEARCH
@@ -718,6 +926,8 @@ def generate_answer(question, chunks, cls, subj, style, history, ch_ctx=None):
     system = f"""You are BrainForge — expert CBSE AI tutor for India.
 Read NCERT snippets. Rewrite as clear, structured, student-friendly teaching.
 Enrich with analogies, memory tricks, Indian examples.
+MATH FORMATTING: Always write equations using LaTeX. Use $$...$$ for display math and $...$ for inline math.
+Example: The quadratic formula is $$x = \\frac{{-b \\pm \\sqrt{{b^2-4ac}}}}{{2a}}$$
 STYLE: {style_instr}  Bold key terms. Add 💡 Quick Tip where helpful.
 STUDENT: {cls} CBSE, age {age}{ch_line}
 FORMAT: ## [Topic] / Explanation / **Key Points:** - ... / 💡 Quick Tip: ... / 📚 NCERT {cls} {subj}
@@ -803,17 +1013,29 @@ def process_question(question, ch_ctx=None, ch_filter="", ch_subj=None):
     return answer, chunks
 
 # ════════════════════════════════════════════════════════════════
-# SIDEBAR
+# SIDEBAR  (with Streak + Progress bars)
 # ════════════════════════════════════════════════════════════════
 
 with st.sidebar:
+    cls   = st.session_state.selected_class
+    subj  = st.session_state.selected_subject
+
     ident_short = st.session_state.auth_identifier
     if len(ident_short) > 22: ident_short = ident_short[:20] + "…"
+
+    # ── Streak display ──
+    streak_val = st.session_state.streak or 0
+    flame      = "🔥" if streak_val >= 2 else "✨"
     st.markdown(f"""
     <div style="padding:8px 0 14px;border-bottom:1px solid rgba(255,255,255,0.07);">
       <div style="font-size:1.15rem;font-weight:800;color:#e2e8f0;">🧠 BrainForge</div>
       <div style="font-size:0.68rem;color:#64748b;margin-top:2px;">NCERT Class 8 · 9 · 10</div>
       <div style="margin-top:7px;font-size:0.7rem;color:#a78bfa;font-weight:600;">👤 {ident_short}</div>
+      <div class="streak-badge" style="margin-top:10px;">
+        <span style="font-size:1.1rem;">{flame}</span>
+        <span class="streak-num">{streak_val}</span>
+        <span class="streak-label">day streak</span>
+      </div>
     </div>""", unsafe_allow_html=True)
 
     st.markdown("#### 🎓 Class")
@@ -822,7 +1044,23 @@ with st.sidebar:
                        label_visibility="collapsed", key="cls_radio")
     if sel_cls != st.session_state.selected_class:
         st.session_state.update(selected_class=sel_cls, selected_chapter=None,
-                                chapter_mode=False, messages=[], quiz_state=None)
+                                chapter_mode=False, messages=[], quiz_state=None,
+                                chapter_progress=None)
+
+    # Class progress bar
+    prog_pct = get_class_progress_pct(sel_cls)
+    prog_pct_int = int(prog_pct * 100)
+    prog_color = "#10b981" if prog_pct >= 0.7 else "#7c3aed" if prog_pct >= 0.3 else "#06b6d4"
+    st.markdown(f"""
+    <div style="margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;font-size:0.65rem;color:#64748b;margin-bottom:3px;">
+        <span>Chapter progress</span>
+        <span style="color:{prog_color};font-weight:700;">{prog_pct_int}%</span>
+      </div>
+      <div class="prog-bar-wrap">
+        <div class="prog-bar" style="width:{prog_pct_int}%;background:{prog_color};"></div>
+      </div>
+    </div>""", unsafe_allow_html=True)
 
     st.markdown("#### 📚 Subject")
     sel_subj = st.radio("subj", SUBJECTS,
@@ -832,6 +1070,19 @@ with st.sidebar:
         st.session_state.update(selected_subject=sel_subj, selected_chapter=None,
                                 chapter_mode=False, messages=[], quiz_state=None)
 
+    # Quiz stats
+    total_q, correct_q = get_quiz_stats()
+    acc = int((correct_q / total_q) * 100) if total_q else 0
+    if total_q:
+        st.markdown(f"""
+        <div style="margin:8px 0;padding:8px 10px;background:rgba(16,185,129,0.06);
+             border:1px solid rgba(16,185,129,0.18);border-radius:9px;">
+          <div style="font-size:0.65rem;color:#64748b;font-weight:600;margin-bottom:3px;">🎯 Quiz Accuracy</div>
+          <div style="font-size:1.1rem;font-weight:800;color:#10b981;">{acc}%
+            <span style="font-size:0.68rem;color:#64748b;font-weight:400;">({correct_q}/{total_q})</span>
+          </div>
+        </div>""", unsafe_allow_html=True)
+
     st.markdown("---")
 
     if st.session_state.usage is None: st.session_state.usage = get_usage()
@@ -839,15 +1090,14 @@ with st.sidebar:
     pct   = min(used / DAILY_LIMIT, 1.0)
     bar_c = ("linear-gradient(90deg,#7c3aed,#06b6d4)" if pct < 0.8
              else "linear-gradient(90deg,#f59e0b,#ef4444)")
-    pill_c = "green" if pct < 0.6 else ("warn" if pct < 0.9 else "red")
     st.markdown(f"""
     <div style="margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
         <span style="font-size:0.7rem;color:#94a3b8;font-weight:600;">Daily Usage</span>
-        <span class="pill {pill_c}">{used}/{DAILY_LIMIT}</span>
+        <span style="font-size:0.7rem;color:#a78bfa;font-weight:700;">{used}/{DAILY_LIMIT}</span>
       </div>
-      <div class="rate-bar-wrap">
-        <div class="rate-bar" style="width:{int(pct*100)}%;background:{bar_c};"></div>
+      <div class="prog-bar-wrap">
+        <div class="prog-bar" style="width:{int(pct*100)}%;background:{bar_c};"></div>
       </div>
     </div>""", unsafe_allow_html=True)
 
@@ -856,13 +1106,6 @@ with st.sidebar:
     answer_depth = st.selectbox("Answer style", ["Simple","Detailed","Bullets","Examples"],
                                 key="answer_depth")
 
-    msgs_count = len([m for m in st.session_state.messages if m["role"] == "user"])
-    if msgs_count:
-        st.markdown(
-            f'<div class="pill green">💬 {msgs_count} question{"s" if msgs_count!=1 else ""}</div>',
-            unsafe_allow_html=True,
-        )
-
     if st.button("🗑️ Clear Chat", use_container_width=True):
         st.session_state.update(messages=[], selected_chapter=None,
                                 chapter_mode=False, quiz_state=None)
@@ -870,7 +1113,8 @@ with st.sidebar:
 
     if st.button("🚪 Sign Out", use_container_width=True):
         for k in ["auth_stage","auth_identifier","auth_user_id","auth_otp_time",
-                  "messages","usage","quiz_state","selected_chapter"]:
+                  "messages","usage","quiz_state","selected_chapter",
+                  "streak","streak_initialized","chapter_progress"]:
             st.session_state[k] = None
         st.session_state.auth_stage = "input"
         st.rerun()
@@ -892,9 +1136,15 @@ st.markdown(f"""
       <div style="font-size:1rem;font-weight:800;color:#e2e8f0;">NCERT AI Tutor</div>
       <div style="font-size:0.72rem;color:#64748b;">{cls} · {subj} · NCERT-grounded answers</div>
     </div>
-    <div style="margin-left:auto;">
-      <span class="pill">{CLASS_ICONS.get(cls,"")} {cls}</span>
-      <span class="pill blue">{SUBJECT_ICONS.get(subj,"")} {subj}</span>
+    <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;">
+      <span style="background:rgba(124,58,237,0.15);border:1px solid rgba(124,58,237,0.3);
+            border-radius:6px;padding:3px 9px;font-size:0.68rem;font-weight:700;color:#a78bfa;">
+        {CLASS_ICONS.get(cls,"")} {cls}
+      </span>
+      <span style="background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.25);
+            border-radius:6px;padding:3px 9px;font-size:0.68rem;font-weight:700;color:#67e8f9;">
+        {SUBJECT_ICONS.get(subj,"")} {subj}
+      </span>
     </div>
   </div>
 </div>""", unsafe_allow_html=True)
@@ -914,7 +1164,8 @@ def render_sources(chunks):
             rel = c["relevance"]
             bc  = "#10b981" if rel >= 70 else "#f59e0b" if rel >= 45 else "#64748b"
             st.markdown(f"""
-            <div class="src-card" style="border-left-color:{bc};">
+            <div style="background:rgba(255,255,255,0.02);border-left:3px solid {bc};
+                 border-radius:0 8px 8px 0;padding:10px 14px;margin-bottom:8px;">
               <div style="display:flex;justify-content:space-between;">
                 <span style="color:#a78bfa;font-weight:700;font-size:0.72rem;">
                   {CLASS_ICONS.get(c.get('class',''),'')} {c.get('class','')} ·
@@ -929,7 +1180,7 @@ def render_sources(chunks):
             </div>""", unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
-# TAB 1 — CHAT
+# TAB 1 — CHAT  (uses render_answer_with_math)
 # ════════════════════════════════════════════════════════════════
 
 with tab_chat:
@@ -972,26 +1223,23 @@ with tab_chat:
                     st.rerun()
         st.markdown("")
 
-    # Render chat history
+    # Render chat history (with math rendering)
     for idx, msg in enumerate(st.session_state.messages):
         if msg["role"] == "user":
             st.markdown(f"""
-            <div class="msg-wrap">
-              <div class="msg-label msg-label-right">You</div>
-              <div style="display:flex;justify-content:flex-end;">
-                <div class="msg-user">{msg['content']}</div>
-              </div>
+            <div style="display:flex;justify-content:flex-end;margin-bottom:6px;">
+              <div class="msg-user">{msg['content']}</div>
             </div>""", unsafe_allow_html=True)
         else:
-            st.markdown('<div class="msg-label">🧠 BrainForge</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:0.68rem;color:#a78bfa;font-weight:700;margin-bottom:4px;">🧠 BrainForge</div>', unsafe_allow_html=True)
             with st.container():
                 st.markdown(
-                    '<div style="background:rgba(255,255,255,0.035);'
-                    'border:1px solid rgba(255,255,255,0.08);'
+                    '<div style="background:rgba(255,255,255,0.035);border:1px solid rgba(255,255,255,0.08);'
                     'border-radius:4px 16px 16px 16px;padding:14px 18px;margin-bottom:4px;">',
                     unsafe_allow_html=True,
                 )
-                st.markdown(msg["content"])
+                # ✨ Use math-aware renderer
+                render_answer_with_math(msg["content"])
                 st.markdown('</div>', unsafe_allow_html=True)
             render_sources(msg.get("chunks", []))
             sv_col, _ = st.columns([1, 5])
@@ -1000,7 +1248,6 @@ with tab_chat:
                     ok = save_note(msg["content"], cls, subj, ch_filter or "General")
                     st.toast("✅ Saved!" if ok else "❌ Could not save.")
 
-    # Chat input — CSS pins it to bottom, left edge respects sidebar
     ph = (f"Ask about {ch_title}…" if ch_ctx else
           f"Ask anything from {cls} {subj}…" if subj != "Both" else
           f"Ask anything from {cls} Maths or Science…")
@@ -1008,24 +1255,20 @@ with tab_chat:
     question = st.chat_input(ph)
     if question:
         st.markdown(f"""
-        <div class="msg-wrap">
-          <div class="msg-label msg-label-right">You</div>
-          <div style="display:flex;justify-content:flex-end;">
-            <div class="msg-user">{question}</div>
-          </div>
+        <div style="display:flex;justify-content:flex-end;margin-bottom:6px;">
+          <div class="msg-user">{question}</div>
         </div>""", unsafe_allow_html=True)
 
         answer, chunks = process_question(question, ch_ctx, ch_filter, ch_subj_)
         if answer:
-            st.markdown('<div class="msg-label">🧠 BrainForge</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:0.68rem;color:#a78bfa;font-weight:700;margin-bottom:4px;">🧠 BrainForge</div>', unsafe_allow_html=True)
             with st.container():
                 st.markdown(
-                    '<div style="background:rgba(255,255,255,0.035);'
-                    'border:1px solid rgba(255,255,255,0.08);'
+                    '<div style="background:rgba(255,255,255,0.035);border:1px solid rgba(255,255,255,0.08);'
                     'border-radius:4px 16px 16px 16px;padding:14px 18px;margin-bottom:4px;">',
                     unsafe_allow_html=True,
                 )
-                st.markdown(answer)
+                render_answer_with_math(answer)
                 st.markdown('</div>', unsafe_allow_html=True)
             render_sources(chunks)
             st.session_state.messages += [
@@ -1034,30 +1277,45 @@ with tab_chat:
             ]
 
 # ════════════════════════════════════════════════════════════════
-# TAB 2 — CHAPTERS
+# TAB 2 — CHAPTERS  (with progress badges)
 # ════════════════════════════════════════════════════════════════
 
 with tab_idx:
     subjs_show = ["Mathematics","Science"] if subj == "Both" else [subj]
+    progress   = get_chapter_progress()
 
     if st.session_state.selected_chapter and not st.session_state.chapter_mode:
         ch_key, ch_s = st.session_state.selected_chapter
         ch_title = CHAPTER_INDEX.get(cls,{}).get(ch_s,{}).get(ch_key, ch_key)
 
+        # ✨ Mark chapter as visited when opened
+        mark_chapter_visited(ch_key, cls, ch_s)
+
         if st.button("← Back", key="back_idx"):
             st.session_state.selected_chapter = None; st.rerun()
 
+        visits = progress.get(ch_key, 0)
+        visit_label = f"✅ Visited {visits}×" if visits else "🆕 First visit!"
+        visit_color = "#10b981" if visits else "#a78bfa"
+
         st.markdown(f"""
         <div class="bf-card" style="border-color:{c_col}40;margin-bottom:12px;">
-          <div style="font-size:0.66rem;color:#a78bfa;font-weight:700;margin-bottom:3px;">
-            {CLASS_ICONS.get(cls,'')} {cls} · {SUBJECT_ICONS.get(ch_s,'')} {ch_s}
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div>
+              <div style="font-size:0.66rem;color:#a78bfa;font-weight:700;margin-bottom:3px;">
+                {CLASS_ICONS.get(cls,'')} {cls} · {SUBJECT_ICONS.get(ch_s,'')} {ch_s}
+              </div>
+              <div style="font-size:0.95rem;font-weight:700;color:#e2e8f0;">{ch_title}</div>
+            </div>
+            <span style="background:rgba(16,185,129,0.1);border:1px solid {visit_color}40;
+                  border-radius:8px;padding:4px 10px;font-size:0.66rem;color:{visit_color};
+                  font-weight:700;white-space:nowrap;">{visit_label}</span>
           </div>
-          <div style="font-size:0.95rem;font-weight:700;color:#e2e8f0;">{ch_title}</div>
         </div>""", unsafe_allow_html=True)
 
         with st.spinner("📖 Loading overview…"):
             summary = generate_chapter_summary(ch_key, ch_title, cls, ch_s)
-        st.markdown(summary)
+        render_answer_with_math(summary)
         st.divider()
         if st.button("💬 Chat about this Chapter", use_container_width=True, type="primary"):
             st.session_state.update(
@@ -1068,6 +1326,27 @@ with tab_idx:
             )
             st.rerun()
     else:
+        # ── Overall progress bar for this class ──
+        done_count = sum(
+            1 for s in CHAPTER_INDEX.get(cls, {})
+            for k in CHAPTER_INDEX[cls][s]
+            if k in progress
+        )
+        total_count = sum(len(v) for v in CHAPTER_INDEX.get(cls, {}).values())
+        st.markdown(f"""
+        <div style="margin-bottom:14px;padding:10px 14px;background:rgba(124,58,237,0.05);
+             border:1px solid rgba(124,58,237,0.18);border-radius:10px;">
+          <div style="display:flex;justify-content:space-between;font-size:0.72rem;
+               color:#94a3b8;margin-bottom:5px;">
+            <span>📊 {cls} Progress</span>
+            <span style="color:#a78bfa;font-weight:700;">{done_count}/{total_count} chapters visited</span>
+          </div>
+          <div class="prog-bar-wrap">
+            <div class="prog-bar" style="width:{int((done_count/total_count)*100) if total_count else 0}%;
+                 background:linear-gradient(90deg,#7c3aed,#06b6d4);"></div>
+          </div>
+        </div>""", unsafe_allow_html=True)
+
         for s in subjs_show:
             chapters = CHAPTER_INDEX.get(cls,{}).get(s,{})
             if not chapters: continue
@@ -1076,11 +1355,17 @@ with tab_idx:
                 parts  = ch_title.split(" — ", 1)
                 ch_num = parts[0] if len(parts) > 1 else ""
                 ch_nm  = parts[1] if len(parts) > 1 else ch_title
+                visits = progress.get(ch_key, 0)
+
+                # ✨ Progress badge
+                badge = (f'<span class="ch-visited">✅ {visits}× visited</span>'
+                         if visits else '<span class="ch-new">New</span>')
+
                 a, b = st.columns([6, 1])
                 with a:
                     st.markdown(f"""
                     <div class="bf-card">
-                      <div style="font-size:0.66rem;color:#7c3aed;font-weight:700;">{ch_num}</div>
+                      <div style="font-size:0.66rem;color:#7c3aed;font-weight:700;">{ch_num} {badge}</div>
                       <div style="font-size:0.86rem;font-weight:600;color:#e2e8f0;">{ch_nm}</div>
                     </div>""", unsafe_allow_html=True)
                 with b:
@@ -1090,76 +1375,160 @@ with tab_idx:
             st.markdown("")
 
 # ════════════════════════════════════════════════════════════════
-# TAB 3 — QUIZ
+# TAB 3 — QUIZ  (with attempt tracking + wrong answer review)
 # ════════════════════════════════════════════════════════════════
 
 with tab_quiz:
-    st.markdown("#### 🎯 Quick Quiz")
-    st.caption("AI-generated MCQs from NCERT content")
-    quiz_topic = st.text_input("Topic",
-                               placeholder="e.g. Photosynthesis, Newton's Laws, Trigonometry…",
-                               key="qtopic")
-    g1, _ = st.columns([1, 2])
-    with g1:
-        gen_btn = st.button("⚡ Generate Question", use_container_width=True, type="primary")
+    quiz_tab, review_tab = st.tabs(["⚡ New Question", "📋 Review Mistakes"])
 
-    if gen_btn:
-        if not quiz_topic.strip():
-            st.warning("Enter a topic first.", icon="⚠️")
-        elif rate_limit_check():
-            with st.spinner("Generating MCQ from NCERT…"):
-                chunks = retrieve_chunks(quiz_topic, cls, subj, "", top_k=4)
-                q_data = generate_quiz(quiz_topic, cls, subj, chunks)
-            if q_data:
-                st.session_state.quiz_state    = q_data
-                st.session_state.quiz_answered = False
-                st.session_state.usage = increment_usage()
-            else:
-                st.error("Could not generate quiz. Try a more specific topic.", icon="❌")
+    # ── Generate quiz ──────────────────────────────────────────
+    with quiz_tab:
+        st.markdown("#### 🎯 Quick Quiz")
+        st.caption("AI-generated MCQs from NCERT content")
+        quiz_topic = st.text_input("Topic",
+                                   placeholder="e.g. Photosynthesis, Newton's Laws, Trigonometry…",
+                                   key="qtopic")
+        g1, _ = st.columns([1, 2])
+        with g1:
+            gen_btn = st.button("⚡ Generate Question", use_container_width=True, type="primary")
 
-    if st.session_state.quiz_state:
-        q            = st.session_state.quiz_state
-        answered     = st.session_state.quiz_answered
-        correct_letter = q.get("correct","A").upper()
-        st.markdown(f"""
-        <div class="bf-card" style="border-color:rgba(124,58,237,0.38);margin-top:10px;">
-          <div style="font-size:0.66rem;color:#a78bfa;font-weight:700;margin-bottom:5px;">
-            {CLASS_ICONS.get(cls,'')} {cls} · {SUBJECT_ICONS.get(subj,'')} {subj}
-          </div>
-          <div style="font-size:0.93rem;font-weight:700;color:#e2e8f0;line-height:1.5;">{q['question']}</div>
-        </div>""", unsafe_allow_html=True)
+        if gen_btn:
+            if not quiz_topic.strip():
+                st.warning("Enter a topic first.", icon="⚠️")
+            elif rate_limit_check():
+                with st.spinner("Generating MCQ from NCERT…"):
+                    chunks = retrieve_chunks(quiz_topic, cls, subj, "", top_k=4)
+                    q_data = generate_quiz(quiz_topic, cls, subj, chunks)
+                if q_data:
+                    st.session_state.quiz_state      = q_data
+                    st.session_state.quiz_answered   = False
+                    st.session_state.quiz_topic_last = quiz_topic.strip()
+                    st.session_state.usage = increment_usage()
+                else:
+                    st.error("Could not generate quiz. Try a more specific topic.", icon="❌")
 
-        for opt in q["options"]:
-            letter = opt[0].upper()
-            if not answered:
-                if st.button(opt, key=f"opt_{letter}", use_container_width=True):
-                    st.session_state.quiz_answered = True
-                    st.session_state.quiz_last_pick = letter
-                    st.rerun()
-            else:
-                chosen = st.session_state.get("quiz_last_pick","")
-                sty = "correct" if letter == correct_letter else ("incorrect" if letter == chosen else "")
-                ico = "✅" if letter == correct_letter else ("❌" if letter == chosen else "")
-                st.markdown(f'<div class="quiz-opt {sty}">{ico} {opt}</div>', unsafe_allow_html=True)
+        if st.session_state.quiz_state:
+            q              = st.session_state.quiz_state
+            answered       = st.session_state.quiz_answered
+            correct_letter = q.get("correct","A").upper()
 
-        if answered:
-            chosen = st.session_state.get("quiz_last_pick","")
-            if chosen == correct_letter: st.success("🎉 Correct! Well done.")
-            else: st.error(f"The correct answer is **{correct_letter}**.")
             st.markdown(f"""
-            <div style="background:rgba(6,182,212,0.06);border:1px solid rgba(6,182,212,0.18);
-                 border-radius:10px;padding:11px 15px;margin-top:8px;font-size:0.82rem;color:#cbd5e1;">
-              💡 <strong>Explanation:</strong> {q.get('explanation','')}
+            <div class="bf-card" style="border-color:rgba(124,58,237,0.38);margin-top:10px;">
+              <div style="font-size:0.66rem;color:#a78bfa;font-weight:700;margin-bottom:5px;">
+                {CLASS_ICONS.get(cls,'')} {cls} · {SUBJECT_ICONS.get(subj,'')} {subj}
+              </div>
+              <div style="font-size:0.93rem;font-weight:700;color:#e2e8f0;line-height:1.5;">{q['question']}</div>
             </div>""", unsafe_allow_html=True)
-            n1, n2 = st.columns(2)
-            with n1:
-                if st.button("🔄 New Question", use_container_width=True):
-                    st.session_state.quiz_state    = None
-                    st.session_state.quiz_answered = False
-                    st.rerun()
-            with n2:
-                if st.button("💬 Discuss this topic", use_container_width=True):
-                    st.rerun()
+
+            for opt in q["options"]:
+                letter = opt[0].upper()
+                if not answered:
+                    if st.button(opt, key=f"opt_{letter}", use_container_width=True):
+                        is_correct = (letter == correct_letter)
+                        st.session_state.quiz_answered   = True
+                        st.session_state.quiz_last_pick  = letter
+                        # ✨ Save attempt to Supabase
+                        save_quiz_attempt(
+                            st.session_state.quiz_topic_last,
+                            q, letter, is_correct
+                        )
+                        st.rerun()
+                else:
+                    chosen = st.session_state.get("quiz_last_pick","")
+                    sty = "correct" if letter == correct_letter else ("incorrect" if letter == chosen else "")
+                    ico = "✅" if letter == correct_letter else ("❌" if letter == chosen else "")
+                    st.markdown(f'<div class="quiz-opt {sty}">{ico} {opt}</div>', unsafe_allow_html=True)
+
+            if answered:
+                chosen = st.session_state.get("quiz_last_pick","")
+                if chosen == correct_letter: st.success("🎉 Correct! Well done.")
+                else: st.error(f"The correct answer is **{correct_letter}**.")
+                st.markdown(f"""
+                <div style="background:rgba(6,182,212,0.06);border:1px solid rgba(6,182,212,0.18);
+                     border-radius:10px;padding:11px 15px;margin-top:8px;font-size:0.82rem;color:#cbd5e1;">
+                  💡 <strong>Explanation:</strong> {q.get('explanation','')}
+                </div>""", unsafe_allow_html=True)
+                n1, n2 = st.columns(2)
+                with n1:
+                    if st.button("🔄 New Question", use_container_width=True):
+                        st.session_state.quiz_state    = None
+                        st.session_state.quiz_answered = False
+                        st.rerun()
+                with n2:
+                    if st.button("💬 Ask in Chat", use_container_width=True):
+                        st.rerun()
+
+    # ── Wrong answer review ────────────────────────────────────
+    with review_tab:
+        total_q, correct_q = get_quiz_stats()
+        wrong_q = total_q - correct_q
+        acc     = int((correct_q / total_q) * 100) if total_q else 0
+
+        if total_q:
+            r1, r2, r3 = st.columns(3)
+            with r1:
+                st.markdown(f"""
+                <div style="text-align:center;padding:12px;background:rgba(124,58,237,0.08);
+                     border:1px solid rgba(124,58,237,0.2);border-radius:10px;">
+                  <div style="font-size:1.4rem;font-weight:800;color:#a78bfa;">{total_q}</div>
+                  <div style="font-size:0.65rem;color:#64748b;">Attempted</div>
+                </div>""", unsafe_allow_html=True)
+            with r2:
+                st.markdown(f"""
+                <div style="text-align:center;padding:12px;background:rgba(16,185,129,0.08);
+                     border:1px solid rgba(16,185,129,0.2);border-radius:10px;">
+                  <div style="font-size:1.4rem;font-weight:800;color:#10b981;">{correct_q}</div>
+                  <div style="font-size:0.65rem;color:#64748b;">Correct</div>
+                </div>""", unsafe_allow_html=True)
+            with r3:
+                st.markdown(f"""
+                <div style="text-align:center;padding:12px;background:rgba(239,68,68,0.08);
+                     border:1px solid rgba(239,68,68,0.2);border-radius:10px;">
+                  <div style="font-size:1.4rem;font-weight:800;color:#f87171;">{wrong_q}</div>
+                  <div style="font-size:0.65rem;color:#64748b;">Wrong</div>
+                </div>""", unsafe_allow_html=True)
+            st.markdown("")
+
+        wrong_list = get_wrong_answers()
+        if not wrong_list:
+            st.markdown("""
+            <div style="text-align:center;padding:40px 20px;color:#64748b;">
+              <div style="font-size:2rem;">🎉</div>
+              <div style="font-weight:600;margin-top:8px;">No wrong answers yet!</div>
+              <div style="font-size:0.78rem;margin-top:4px;">Keep attempting quizzes and mistakes will appear here for review.</div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown(f"#### 📋 {len(wrong_list)} Wrong Answers to Review")
+            for idx, wa in enumerate(wrong_list):
+                topic   = wa.get("topic","Unknown")
+                question = wa.get("question","")
+                correct  = wa.get("correct_answer","")
+                picked   = wa.get("user_answer","")
+                expl     = wa.get("explanation","")
+                cls_     = wa.get("class","")
+                subj_    = wa.get("subject","")
+                ts       = wa.get("created_at","")[:10]
+
+                # Parse options JSON
+                try:
+                    opts = json.loads(wa.get("options","[]"))
+                except:
+                    opts = []
+                correct_text = next((o for o in opts if o.startswith(correct)), correct)
+                picked_text  = next((o for o in opts if o.startswith(picked)), picked)
+
+                st.markdown(f"""
+                <div class="wrong-card">
+                  <div class="wc-topic">
+                    📌 {topic} · {CLASS_ICONS.get(cls_,'')} {cls_} · {SUBJECT_ICONS.get(subj_,'')} {subj_} · {ts}
+                  </div>
+                  <div class="wc-q">{question}</div>
+                  <div class="wc-ans">
+                    ❌ <span style="color:#f87171;">You answered:</span> {picked_text}<br>
+                    ✅ <span style="color:#10b981;">Correct answer:</span> {correct_text}
+                  </div>
+                  <div class="wc-exp">💡 {expl}</div>
+                </div>""", unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
 # TAB 4 — NOTES
@@ -1168,8 +1537,7 @@ with tab_quiz:
 with tab_notes:
     st.markdown("#### 🗒️ Saved Notes")
     with st.expander("✏️ Add a custom note"):
-        note_txt = st.text_area("Your note",
-                                placeholder="Write something to remember…",
+        note_txt = st.text_area("Your note", placeholder="Write something to remember…",
                                 height=90, key="new_note")
         if st.button("💾 Save Note", use_container_width=True):
             if note_txt.strip():
@@ -1199,13 +1567,13 @@ with tab_notes:
             with na:
                 st.markdown(f"""
                 <div class="note-card">
-                  <div class="note-ts">🕐 {ts}</div>
-                  <div class="note-ch">
+                  <div style="font-size:0.65rem;color:#64748b;margin-bottom:3px;">🕐 {ts}</div>
+                  <div style="font-size:0.66rem;color:#a78bfa;font-weight:700;margin-bottom:5px;">
                     {CLASS_ICONS.get(note.get('class',''),'')} {note.get('class','')} ·
                     {SUBJECT_ICONS.get(note.get('subject',''),'')} {note.get('subject','')}
                     {'· 📖 '+ch if ch and ch not in ('General','Manual') else ''}
                   </div>
-                  <div class="note-body">{display}</div>
+                  <div style="font-size:0.82rem;color:#cbd5e1;line-height:1.6;">{display}</div>
                 </div>""", unsafe_allow_html=True)
             with nb:
                 if st.button("🗑️", key=f"del_{nid}", help="Delete"):
