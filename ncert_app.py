@@ -156,27 +156,19 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ════════════════════════════════════════════════════════════════
-# CSS  — FIX 1 (sidebar) + FIX 2 (chat input pinned correctly)
-# ════════════════════════════════════════════════════════════════
-
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800&display=swap');
 
 :root {
-  --bg:       #06070f;
-  --surface:  #0d1117;
-  --border:   rgba(255,255,255,0.07);
-  --accent:   #7c3aed;
-  --text:     #e2e8f0;
-  --muted:    #64748b;
-  --success:  #10b981;
-  --warn:     #f59e0b;
-  --danger:   #ef4444;
-  --radius:   14px;
-  --font:     'Space Grotesk', sans-serif;
-  --sidebar-w: 260px;   /* must match Streamlit's actual sidebar width */
+  --bg:#06070f;
+  --surface:#0d1117;
+  --border:rgba(255,255,255,0.07);
+  --accent:#7c3aed;
+  --text:#e2e8f0;
+  --muted:#64748b;
+  --radius:14px;
+  --font:'Space Grotesk',sans-serif;
 }
 
 html, body, .stApp {
@@ -185,240 +177,93 @@ html, body, .stApp {
   font-family: var(--font) !important;
 }
 
-/* Hide only what's safe — do NOT hide the sidebar collapse button */
-#MainMenu { visibility: hidden; }
-footer { visibility: hidden; }
+#MainMenu, footer { visibility:hidden; }
 
-/* ── SIDEBAR: style only, never override width/display/position ── */
-/* Streamlit controls sidebar open/close via JS — we must not fight it */
+/* ───────── SIDEBAR ───────── */
 section[data-testid="stSidebar"] {
-  background: #080b14 !important;
-  border-right: 1px solid rgba(124,58,237,0.18) !important;
+  background:#080b14 !important;
+  border-right:1px solid rgba(124,58,237,0.18) !important;
 }
-/* Sidebar content text */
-section[data-testid="stSidebar"] > div {
-  background: #080b14 !important;
-}
-section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] p,
-section[data-testid="stSidebar"] span,
-section[data-testid="stSidebar"] div {
+
+section[data-testid="stSidebar"] * {
   color: var(--text) !important;
-  font-family: var(--font) !important;
-}
-section[data-testid="stSidebar"] .stButton > button {
-  background: rgba(124,58,237,0.14) !important;
-  border: 1px solid rgba(124,58,237,0.28) !important;
-  color: #a78bfa !important;
 }
 
-/* ── Sidebar collapse/expand toggle button — ALWAYS visible ── */
-button[data-testid="collapsedControl"],
-button[data-testid="baseButton-headerNoPadding"] {
-  display: flex !important;
-  visibility: visible !important;
-  opacity: 1 !important;
-  background: rgba(124,58,237,0.2) !important;
-  border: 1px solid rgba(124,58,237,0.4) !important;
-  border-radius: 8px !important;
-  color: #a78bfa !important;
-}
-
-/* ── Main content ── */
+/* ───────── MAIN LAYOUT ───────── */
 .block-container {
-  padding: 1rem 1.5rem 120px 1.5rem !important;
-  max-width: 100% !important;
+  padding:1rem 1.5rem 110px 1.5rem !important;
+  max-width:100% !important;
 }
 
-/* ── Buttons ── */
+/* ───────── BUTTONS ───────── */
 .stButton > button {
   background: var(--accent) !important;
-  color: #fff !important; border: none !important;
-  border-radius: 10px !important;
-  font-family: var(--font) !important;
-  font-weight: 700 !important; font-size: 0.85rem !important;
-  padding: 0.5rem 1rem !important;
-  transition: all 0.15s !important; width: 100% !important;
-}
-.stButton > button:hover { background: #6d28d9 !important; transform: translateY(-1px) !important; }
-.stButton > button[kind="secondary"] {
-  background: rgba(255,255,255,0.05) !important;
-  color: var(--text) !important;
+  color:#fff !important;
+  border-radius:10px !important;
+  font-weight:700 !important;
+  font-size:0.85rem !important;
 }
 
-/* ── Text inputs ── */
-.stTextInput > div > div > input,
-.stTextArea textarea {
-  background: var(--surface) !important;
-  border: 1px solid var(--border) !important;
-  border-radius: 10px !important;
-  color: var(--text) !important;
-  font-family: var(--font) !important;
-}
-.stTextInput > div > div > input:focus,
-.stTextArea textarea:focus {
-  border-color: var(--accent) !important;
-  box-shadow: 0 0 0 2px rgba(124,58,237,0.18) !important;
+/* ───────── INPUTS ───────── */
+.stTextInput input,
+textarea {
+  background:var(--surface) !important;
+  border:1px solid var(--border) !important;
+  color:var(--text) !important;
 }
 
-/* ── Hide Streamlit chat avatars ── */
-div[data-testid="stChatMessage"] {
-  background: transparent !important;
-  border: none !important;
-  padding: 0 !important;
-  margin: 0 !important;
-  gap: 0 !important;
-}
-div[data-testid="stChatMessage"] > div:first-child { display: none !important; }
-div[data-testid="stChatMessageContent"] { padding: 0 !important; }
-
-/* ── Chat bubbles ── */
-.msg-wrap { display: flex; flex-direction: column; margin-bottom: 14px; gap: 3px; }
-.msg-label { font-size: 0.65rem; font-weight: 700; color: var(--muted);
-             text-transform: uppercase; letter-spacing: 0.06em; padding: 0 4px; }
-.msg-label-right { text-align: right; }
+/* ───────── CHAT UI ───────── */
 .msg-user {
-  align-self: flex-end;
-  background: linear-gradient(135deg, rgba(124,58,237,0.22), rgba(124,58,237,0.12));
-  border: 1px solid rgba(124,58,237,0.3);
-  border-radius: 16px 16px 4px 16px;
-  padding: 11px 15px; max-width: 82%;
-  font-size: 0.88rem; line-height: 1.55; color: #e2e8f0;
+  background:rgba(124,58,237,0.2);
+  border-radius:16px;
+  padding:10px;
 }
+
 .msg-bot {
-  align-self: flex-start;
-  background: rgba(255,255,255,0.035);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 4px 16px 16px 16px;
-  padding: 14px 18px; max-width: 94%;
-  font-size: 0.87rem; line-height: 1.65; color: #e2e8f0;
-}
-.msg-bot strong { color: #a78bfa; }
-.msg-bot h2,.msg-bot h3,.msg-bot h4 {
-  color: #f1f5f9 !important; font-family: var(--font) !important; margin: 10px 0 5px !important;
+  background:rgba(255,255,255,0.04);
+  border-radius:16px;
+  padding:12px;
 }
 
-/* ── Chat input: pinned to bottom, width follows Streamlit's main column ── */
-/* Do NOT set left — that breaks the sidebar layout engine on Streamlit Cloud */
+/* 🚀 FIXED CHAT INPUT (MAIN ISSUE SOLVED) */
 div[data-testid="stChatInput"] {
-  position: fixed !important;
+  position: sticky !important;
   bottom: 0 !important;
-  right: 0 !important;
-  z-index: 999 !important;
+  z-index: 10 !important;
   background: linear-gradient(to top, #06070f 70%, transparent) !important;
-  padding: 14px 32px 18px 32px !important;
-  width: auto !important;
+  padding: 12px 20px !important;
 }
+
+/* textarea inside chat */
 div[data-testid="stChatInput"] textarea {
-  background: #0d1117 !important;
-  border: 1px solid rgba(124,58,237,0.45) !important;
-  border-radius: 12px !important;
-  color: var(--text) !important;
-  font-family: var(--font) !important;
-  font-size: 0.88rem !important; padding: 12px 16px !important;
-}
-div[data-testid="stChatInput"] textarea:focus {
-  border-color: var(--accent) !important;
-  box-shadow: 0 0 0 3px rgba(124,58,237,0.18) !important;
+  background:#0d1117 !important;
+  border:1px solid rgba(124,58,237,0.4) !important;
+  border-radius:12px !important;
+  color:var(--text) !important;
 }
 
-/* ── Tabs ── */
-.stTabs [data-baseweb="tab-list"] {
-  background: var(--surface) !important; border-radius: 10px !important;
-  padding: 4px !important; gap: 3px !important;
-  border: 1px solid var(--border) !important;
-}
+/* ───────── TABS ───────── */
 .stTabs [data-baseweb="tab"] {
-  border-radius: 8px !important; color: var(--muted) !important;
-  font-family: var(--font) !important; font-weight: 600 !important; font-size: 0.78rem !important;
+  color:var(--muted) !important;
 }
-.stTabs [aria-selected="true"] { background: var(--accent) !important; color: #fff !important; }
-
-/* ── Radio ── */
-.stRadio > div { gap: 4px !important; }
-.stRadio > div > label {
-  background: rgba(255,255,255,0.03) !important;
-  border: 1px solid var(--border) !important; border-radius: 8px !important;
-  padding: 6px 12px !important; font-size: 0.83rem !important;
-  color: var(--text) !important; text-transform: none !important; letter-spacing: 0 !important;
-}
-.stRadio > div > label:has(input:checked) {
-  border-color: var(--accent) !important;
-  background: rgba(124,58,237,0.12) !important; color: #a78bfa !important;
+.stTabs [aria-selected="true"] {
+  background:var(--accent) !important;
+  color:#fff !important;
 }
 
-/* ── Labels ── */
-label, div[data-testid="stWidgetLabel"] p {
-  color: var(--muted) !important; font-size: 0.73rem !important;
-  font-weight: 700 !important; text-transform: uppercase !important;
-  letter-spacing: 0.05em !important; font-family: var(--font) !important;
+/* ───────── MOBILE ───────── */
+@media (max-width:768px) {
+  .block-container {
+    padding:0.5rem 0.75rem 110px 0.75rem !important;
+  }
 }
 
-/* ── Expanders ── */
-details {
-  background: var(--surface) !important; border-radius: 10px !important;
-  border: 1px solid var(--border) !important;
+/* scrollbar */
+::-webkit-scrollbar { width:4px; }
+::-webkit-scrollbar-thumb {
+  background:rgba(124,58,237,0.4);
+  border-radius:99px;
 }
-details summary { color: var(--text) !important; font-family: var(--font) !important; }
-
-/* ── Selectbox ── */
-.stSelectbox > div > div {
-  background: var(--surface) !important; border: 1px solid var(--border) !important;
-  border-radius: 10px !important; color: var(--text) !important;
-}
-
-/* ── Utility ── */
-.bf-card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 14px 18px; margin-bottom: 10px;
-  transition: border-color 0.2s;
-}
-.bf-card:hover { border-color: rgba(124,58,237,0.32); }
-
-.pill {
-  display: inline-flex; align-items: center; gap: 4px;
-  background: rgba(124,58,237,0.12); border: 1px solid rgba(124,58,237,0.24);
-  border-radius: 99px; padding: 3px 10px;
-  font-size: 0.68rem; font-weight: 700; color: #a78bfa;
-  margin-right: 4px; margin-bottom: 4px;
-}
-.pill.green { background:rgba(16,185,129,0.1);  border-color:rgba(16,185,129,0.24); color:#6ee7b7; }
-.pill.blue  { background:rgba(6,182,212,0.1);   border-color:rgba(6,182,212,0.24);  color:#67e8f9; }
-.pill.warn  { background:rgba(245,158,11,0.1);  border-color:rgba(245,158,11,0.24); color:#fcd34d; }
-.pill.red   { background:rgba(239,68,68,0.1);   border-color:rgba(239,68,68,0.24);  color:#fca5a5; }
-
-.rate-bar-wrap { background:rgba(255,255,255,0.05); border-radius:99px; height:5px; margin:5px 0; overflow:hidden; }
-.rate-bar { height:5px; border-radius:99px; transition:width 0.4s; }
-
-.src-card {
-  border-left: 3px solid var(--accent); background: rgba(255,255,255,0.02);
-  border-radius: 0 10px 10px 0; padding: 9px 12px; margin-bottom: 7px; font-size: 0.78rem;
-}
-.note-card {
-  background: rgba(6,182,212,0.04); border: 1px solid rgba(6,182,212,0.18);
-  border-radius: 12px; padding: 13px 15px; margin-bottom: 10px;
-}
-.note-ts   { font-size: 0.66rem; color: var(--muted); margin-bottom: 4px; }
-.note-ch   { font-size: 0.7rem; color: #67e8f9; font-weight: 700; margin-bottom: 5px; }
-.note-body { font-size: 0.83rem; color: var(--text); line-height: 1.55; }
-
-.quiz-opt {
-  background: rgba(255,255,255,0.04); border: 1px solid var(--border);
-  border-radius: 10px; padding: 10px 14px; margin-bottom: 6px;
-  font-size: 0.86rem; color: var(--text);
-}
-.quiz-opt.correct   { border-color: var(--success) !important; background: rgba(16,185,129,0.1) !important; color: #6ee7b7 !important; }
-.quiz-opt.incorrect { border-color: var(--danger)  !important; background: rgba(239,68,68,0.1)  !important; color: #fca5a5 !important; }
-
-/* ── Mobile ── */
-@media (max-width: 768px) {
-  .block-container { padding: 0.5rem 0.75rem 120px 0.75rem !important; }
-  div[data-testid="stChatInput"] { padding: 14px 16px 18px !important; }
-  .msg-user, .msg-bot { max-width: 96% !important; }
-}
-
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-thumb { background: rgba(124,58,237,0.38); border-radius: 99px; }
 </style>
 """, unsafe_allow_html=True)
 
