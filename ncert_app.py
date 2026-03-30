@@ -2,12 +2,12 @@
 # BrainForge — NCERT Chat (Class 8, 9, 10 | Maths & Science)
 # FIXES:
 #   1. Avatar overlap → removed st.chat_message, custom HTML bubbles
-#   2. Chat input pinned to bottom via CSS fixed positioning
+#   2. Chat input pinned to bottom via CSS fixed positioningF
 #   3. Sidebar always expanded and visible
 #   4. Auth → OTP via email/mobile; rate limit tied to user account
 # ================================================================
 
-import os, re, json, hashlib, datetime, random, string
+import os, re, json, hashlib, datetime, random, string, resend
 import streamlit as st
 from groq import Groq
 from supabase import create_client, Client
@@ -484,12 +484,42 @@ def verify_otp(identifier, otp):
         return False
     except: return False
 
-def send_otp_demo(identifier, otp):
-    """DEMO: display OTP. Replace with Resend/Twilio in production."""
-    st.success(f"🔐 **Demo OTP** (swap with Resend/Twilio in prod): **{otp}**")
+# ════════════════════════════════════════════════════════════════
+# EMAIL OTP (RESEND INTEGRATION)
+# ════════════════════════════════════════════════════════════════
+
+RESEND_API_KEY = _secret("RESEND_API_KEY")
+
+if not RESEND_API_KEY:
+    st.error("Missing RESEND_API_KEY in secrets")
+    st.stop()
+
+resend.api_key = RESEND_API_KEY
+
+def send_otp_email(identifier, otp):
+    try:
+        resend.Emails.send({
+            "from": "BrainForge <onboarding@resend.dev>",
+            "to": [identifier],
+            "subject": "Your BrainForge OTP 🔐",
+            "html": f"""
+                <div style="font-family:Arial,sans-serif;">
+                    <h2>🔐 BrainForge Login OTP</h2>
+                    <p>Your OTP is:</p>
+                    <h1 style="color:#7c3aed;">{otp}</h1>
+                    <p>This OTP is valid for 10 minutes.</p>
+                    <br>
+                    <small>If you didn’t request this, ignore this email.</small>
+                </div>
+            """
+        })
+        return True
+    except Exception as e:
+        st.error(f"❌ Failed to send OTP: {e}")
+        return False
 
 # ════════════════════════════════════════════════════════════════
-# AUTH SCREEN — shown before rest of app
+# AUTH SCREEN — updated with Email OTP (Resend)
 # ════════════════════════════════════════════════════════════════
 
 def render_auth():
@@ -508,32 +538,56 @@ def render_auth():
         """, unsafe_allow_html=True)
         st.markdown("")
 
+        # ───────────── INPUT STAGE ─────────────
         if st.session_state.auth_stage == "input":
             identifier = st.text_input("📧 Email or 📱 Mobile number",
                                        placeholder="you@example.com  or  9876543210",
                                        key="auth_id_input")
+
             if st.button("Send OTP →", type="primary", use_container_width=True):
                 valid, _ = _validate(identifier)
+
                 if not valid:
                     st.error("Enter a valid email or 10-digit mobile number.", icon="❌")
+
                 else:
                     otp = _otp()
                     store_otp(identifier, otp)
-                    send_otp_demo(identifier, otp)
-                    st.session_state.auth_identifier = identifier
-                    st.session_state.auth_otp_time   = datetime.datetime.utcnow()
-                    st.session_state.auth_stage      = "otp"
-                    st.rerun()
 
+                    # 🔥 EMAIL OTP (NEW)
+                    if "@" in identifier:
+                        success = send_otp_email(identifier, otp)
+                    else:
+                        st.error("📱 SMS OTP not supported yet. Please use email.", icon="⚠️")
+                        success = False
+
+                    if success:
+                        st.success("📩 OTP sent to your email!")
+                        st.session_state.auth_identifier = identifier
+                        st.session_state.auth_otp_time   = datetime.datetime.utcnow()
+                        st.session_state.auth_stage      = "otp"
+                        st.rerun()
+                    else:
+                        st.error("Failed to send OTP. Try again.")
+
+        # ───────────── OTP VERIFY STAGE ─────────────
         elif st.session_state.auth_stage == "otp":
             ident = st.session_state.auth_identifier
+
             st.info(f"OTP sent to **{ident}**")
-            otp_in = st.text_input("Enter 6-digit OTP", max_chars=6, placeholder="······", key="otp_in")
+
+            otp_in = st.text_input("Enter 6-digit OTP",
+                                  max_chars=6,
+                                  placeholder="······",
+                                  key="otp_in")
+
             c1, c2 = st.columns(2)
+
             with c1:
                 if st.button("✅ Verify", type="primary", use_container_width=True):
                     if verify_otp(ident, otp_in):
                         uid = get_or_create_user(ident)
+
                         if uid:
                             st.session_state.auth_user_id = uid
                             st.session_state.auth_stage   = "done"
@@ -543,19 +597,31 @@ def render_auth():
                             st.error("Account error. Try again.", icon="❌")
                     else:
                         st.error("Wrong or expired OTP.", icon="❌")
+
             with c2:
                 if st.button("🔄 Resend OTP", use_container_width=True):
                     new_otp = _otp()
                     store_otp(ident, new_otp)
-                    send_otp_demo(ident, new_otp)
-                    st.session_state.auth_otp_time = datetime.datetime.utcnow()
-            if st.button("← Change email/phone", use_container_width=True):
-                st.session_state.auth_stage = "input"; st.rerun()
 
+                    # 🔥 RESEND EMAIL
+                    if "@" in ident:
+                        success = send_otp_email(ident, new_otp)
+                        if success:
+                            st.success("📩 New OTP sent!")
+                    else:
+                        st.error("📱 SMS not supported yet.", icon="⚠️")
+
+                    st.session_state.auth_otp_time = datetime.datetime.utcnow()
+
+            if st.button("← Change email/phone", use_container_width=True):
+                st.session_state.auth_stage = "input"
+                st.rerun()
+
+
+# ───────────── AUTH GATE ─────────────
 if st.session_state.auth_stage != "done":
     render_auth()
     st.stop()
-
 # ════════════════════════════════════════════════════════════════
 # RATE LIMITING — per user_id
 # ════════════════════════════════════════════════════════════════
