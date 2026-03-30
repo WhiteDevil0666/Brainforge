@@ -1,10 +1,10 @@
 # ================================================================
 # BrainForge — NCERT Chat (Class 8, 9, 10 | Maths & Science)
-# FIXES:
-#   1. Avatar overlap → removed st.chat_message, custom HTML bubbles
-#   2. Chat input pinned to bottom via CSS fixed positioningF
-#   3. Sidebar always expanded and visible
-#   4. Auth → OTP via email/mobile; rate limit tied to user account
+# FIXES APPLIED:
+#   1. Sidebar always visible — fixed CSS width + left offset
+#   2. Chat input pinned to bottom, left edge respects sidebar
+#   3. Resend OTP — "to" as plain string, "from" plain email
+#   4. Verbose OTP error logging for debugging
 # ================================================================
 
 import os, re, json, hashlib, datetime, random, string, resend
@@ -153,11 +153,11 @@ st.set_page_config(
     page_title="BrainForge — NCERT AI Tutor",
     page_icon="🧠",
     layout="wide",
-    initial_sidebar_state="expanded",   # FIX 3: always show sidebar
+    initial_sidebar_state="expanded",
 )
 
 # ════════════════════════════════════════════════════════════════
-# CSS
+# CSS  — FIX 1 (sidebar) + FIX 2 (chat input pinned correctly)
 # ════════════════════════════════════════════════════════════════
 
 st.markdown("""
@@ -165,17 +165,18 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800&display=swap');
 
 :root {
-  --bg:      #06070f;
-  --surface: #0d1117;
-  --border:  rgba(255,255,255,0.07);
-  --accent:  #7c3aed;
-  --text:    #e2e8f0;
-  --muted:   #64748b;
-  --success: #10b981;
-  --warn:    #f59e0b;
-  --danger:  #ef4444;
-  --radius:  14px;
-  --font:    'Space Grotesk', sans-serif;
+  --bg:       #06070f;
+  --surface:  #0d1117;
+  --border:   rgba(255,255,255,0.07);
+  --accent:   #7c3aed;
+  --text:     #e2e8f0;
+  --muted:    #64748b;
+  --success:  #10b981;
+  --warn:     #f59e0b;
+  --danger:   #ef4444;
+  --radius:   14px;
+  --font:     'Space Grotesk', sans-serif;
+  --sidebar-w: 260px;   /* must match Streamlit's actual sidebar width */
 }
 
 html, body, .stApp {
@@ -185,17 +186,13 @@ html, body, .stApp {
 }
 #MainMenu, footer, header { visibility: hidden; }
 
-/* ── Main container — bottom padding for pinned chat input (FIX 2) ── */
-.block-container {
-  padding: 1rem 1.5rem 110px 1.5rem !important;
-  max-width: 100% !important;
-}
-
-/* ── Sidebar (FIX 3) ── */
+/* ── FIX 1a: Sidebar — fixed, always visible ── */
 section[data-testid="stSidebar"] {
   background: #080b14 !important;
   border-right: 1px solid rgba(124,58,237,0.18) !important;
-  min-width: 260px !important;
+  width: var(--sidebar-w) !important;
+  min-width: var(--sidebar-w) !important;
+  max-width: var(--sidebar-w) !important;
 }
 section[data-testid="stSidebar"] * {
   color: var(--text) !important;
@@ -205,6 +202,12 @@ section[data-testid="stSidebar"] .stButton > button {
   background: rgba(124,58,237,0.14) !important;
   border: 1px solid rgba(124,58,237,0.28) !important;
   color: #a78bfa !important;
+}
+
+/* ── FIX 1b: Main content — full width, no overlap ── */
+.block-container {
+  padding: 1rem 1.5rem 120px 1.5rem !important;
+  max-width: 100% !important;
 }
 
 /* ── Buttons ── */
@@ -238,7 +241,7 @@ section[data-testid="stSidebar"] .stButton > button {
   box-shadow: 0 0 0 2px rgba(124,58,237,0.18) !important;
 }
 
-/* ── FIX 1: Remove Streamlit chat avatar entirely ── */
+/* ── Hide Streamlit chat avatars ── */
 div[data-testid="stChatMessage"] {
   background: transparent !important;
   border: none !important;
@@ -249,9 +252,10 @@ div[data-testid="stChatMessage"] {
 div[data-testid="stChatMessage"] > div:first-child { display: none !important; }
 div[data-testid="stChatMessageContent"] { padding: 0 !important; }
 
-/* ── Custom chat bubbles ── */
+/* ── Chat bubbles ── */
 .msg-wrap { display: flex; flex-direction: column; margin-bottom: 14px; gap: 3px; }
-.msg-label { font-size: 0.65rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; padding: 0 4px; }
+.msg-label { font-size: 0.65rem; font-weight: 700; color: var(--muted);
+             text-transform: uppercase; letter-spacing: 0.06em; padding: 0 4px; }
 .msg-label-right { text-align: right; }
 .msg-user {
   align-self: flex-end;
@@ -270,18 +274,19 @@ div[data-testid="stChatMessageContent"] { padding: 0 !important; }
   font-size: 0.87rem; line-height: 1.65; color: #e2e8f0;
 }
 .msg-bot strong { color: #a78bfa; }
-.msg-bot h2, .msg-bot h3, .msg-bot h4 {
+.msg-bot h2,.msg-bot h3,.msg-bot h4 {
   color: #f1f5f9 !important; font-family: var(--font) !important; margin: 10px 0 5px !important;
 }
 
-/* ── FIX 2: Pin chat input to bottom ── */
+/* ── FIX 2: Chat input pinned to bottom — left starts AFTER sidebar ── */
 div[data-testid="stChatInput"] {
   position: fixed !important;
-  bottom: 0 !important; left: 0 !important; right: 0 !important;
+  bottom: 0 !important;
+  left: var(--sidebar-w) !important;   /* KEY FIX: clears sidebar */
+  right: 0 !important;
   z-index: 1000 !important;
   background: linear-gradient(to top, #06070f 65%, transparent) !important;
-  padding: 14px 24px 18px !important;
-  padding-left: 28px !important;
+  padding: 14px 32px 18px 32px !important;
 }
 div[data-testid="stChatInput"] textarea {
   background: #0d1117 !important;
@@ -321,7 +326,7 @@ div[data-testid="stChatInput"] textarea:focus {
   background: rgba(124,58,237,0.12) !important; color: #a78bfa !important;
 }
 
-/* ── Widget labels ── */
+/* ── Labels ── */
 label, div[data-testid="stWidgetLabel"] p {
   color: var(--muted) !important; font-size: 0.73rem !important;
   font-weight: 700 !important; text-transform: uppercase !important;
@@ -341,7 +346,7 @@ details summary { color: var(--text) !important; font-family: var(--font) !impor
   border-radius: 10px !important; color: var(--text) !important;
 }
 
-/* ── Utility classes ── */
+/* ── Utility ── */
 .bf-card {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 14px 18px; margin-bottom: 10px;
@@ -381,13 +386,14 @@ details summary { color: var(--text) !important; font-family: var(--font) !impor
   border-radius: 10px; padding: 10px 14px; margin-bottom: 6px;
   font-size: 0.86rem; color: var(--text);
 }
-.quiz-opt.correct  { border-color: var(--success) !important; background: rgba(16,185,129,0.1) !important; color: #6ee7b7 !important; }
-.quiz-opt.incorrect{ border-color: var(--danger)  !important; background: rgba(239,68,68,0.1)  !important; color: #fca5a5 !important; }
+.quiz-opt.correct   { border-color: var(--success) !important; background: rgba(16,185,129,0.1) !important; color: #6ee7b7 !important; }
+.quiz-opt.incorrect { border-color: var(--danger)  !important; background: rgba(239,68,68,0.1)  !important; color: #fca5a5 !important; }
 
-/* ── Mobile ── */
+/* ── Mobile: sidebar collapses, input goes full-width ── */
 @media (max-width: 768px) {
-  .block-container { padding: 0.5rem 0.75rem 110px 0.75rem !important; }
-  div[data-testid="stChatInput"] { padding-left: 16px !important; }
+  :root { --sidebar-w: 0px; }
+  .block-container { padding: 0.5rem 0.75rem 120px 0.75rem !important; }
+  div[data-testid="stChatInput"] { left: 0 !important; padding: 14px 16px 18px !important; }
   .msg-user, .msg-bot { max-width: 96% !important; }
 }
 
@@ -442,7 +448,6 @@ _init()
 
 # ════════════════════════════════════════════════════════════════
 # AUTH HELPERS
-# Supabase tables required — see supabase_setup.sql
 # ════════════════════════════════════════════════════════════════
 
 def _norm(s): return s.strip().lower()
@@ -466,8 +471,10 @@ def get_or_create_user(identifier):
         st.error(f"DB error: {e}"); return None
 
 def store_otp(identifier, otp):
-    try: sb.table("otps").insert({"identifier": _norm(identifier), "otp": otp}).execute()
-    except: pass
+    try:
+        sb.table("otps").insert({"identifier": _norm(identifier), "otp": otp}).execute()
+    except Exception as e:
+        st.error(f"OTP store error: {e}")
 
 def verify_otp(identifier, otp):
     try:
@@ -481,10 +488,12 @@ def verify_otp(identifier, otp):
             sb.table("otps").update({"used": True}).eq("id", row["id"]).execute()
             return True
         return False
-    except: return False
+    except Exception as e:
+        st.error(f"OTP verify error: {e}")
+        return False
 
 # ════════════════════════════════════════════════════════════════
-# EMAIL OTP (RESEND INTEGRATION)
+# EMAIL OTP — FIX: plain string "to" + plain "from" + verbose errors
 # ════════════════════════════════════════════════════════════════
 
 RESEND_API_KEY = _secret("RESEND_API_KEY")
@@ -495,30 +504,46 @@ if not RESEND_API_KEY:
 
 resend.api_key = RESEND_API_KEY
 
-def send_otp_email(identifier, otp):
+def send_otp_email(to_email: str, otp: str) -> bool:
+    """
+    Send OTP email via Resend.
+    FIX 1: 'to' must be a plain string (not a list) for free-tier Resend accounts.
+    FIX 2: 'from' must be a plain email without a display name when using onboarding@resend.dev.
+    FIX 3: Print full error to server logs so it's visible in Streamlit Cloud.
+    """
     try:
-        resend.Emails.send({
-            "from": "BrainForge <onboarding@resend.dev>",
-            "to": [identifier],
+        result = resend.Emails.send({
+            "from":    "onboarding@resend.dev",   # plain email, no display name
+            "to":      to_email.strip(),           # plain string, NOT a list
             "subject": "Your BrainForge OTP 🔐",
             "html": f"""
-                <div style="font-family:Arial,sans-serif;">
-                    <h2>🔐 BrainForge Login OTP</h2>
-                    <p>Your OTP is:</p>
-                    <h1 style="color:#7c3aed;">{otp}</h1>
-                    <p>This OTP is valid for 10 minutes.</p>
-                    <br>
-                    <small>If you didn’t request this, ignore this email.</small>
+                <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;
+                            background:#06070f;color:#e2e8f0;padding:32px;border-radius:12px;">
+                  <h2 style="color:#7c3aed;margin-bottom:8px;">🧠 BrainForge</h2>
+                  <p style="font-size:15px;color:#94a3b8;">Your one-time login code:</p>
+                  <div style="font-size:44px;font-weight:900;color:#7c3aed;
+                       letter-spacing:12px;margin:20px 0;text-align:center;">{otp}</div>
+                  <p style="color:#64748b;font-size:13px;">
+                    Valid for {OTP_EXPIRY_MINUTES} minutes. Do not share this code with anyone.
+                  </p>
+                  <hr style="border:none;border-top:1px solid #1e293b;margin:24px 0;">
+                  <p style="color:#475569;font-size:11px;">
+                    If you didn't request this, you can safely ignore this email.
+                  </p>
                 </div>
-            """
+            """,
         })
+        # Log result to server console (visible in Streamlit Cloud → Logs)
+        print(f"[Resend OK] to={to_email} | result={result}")
         return True
     except Exception as e:
-        st.error(f"❌ Failed to send OTP: {e}")
+        # Full error in both UI and server logs
+        print(f"[Resend ERROR] to={to_email} | error={e}")
+        st.error(f"❌ Email failed: {e}")
         return False
 
 # ════════════════════════════════════════════════════════════════
-# AUTH SCREEN — updated with Email OTP (Resend)
+# AUTH SCREEN
 # ════════════════════════════════════════════════════════════════
 
 def render_auth():
@@ -537,56 +562,41 @@ def render_auth():
         """, unsafe_allow_html=True)
         st.markdown("")
 
-        # ───────────── INPUT STAGE ─────────────
+        # ── INPUT STAGE ──
         if st.session_state.auth_stage == "input":
-            identifier = st.text_input("📧 Email or 📱 Mobile number",
-                                       placeholder="you@example.com  or  9876543210",
-                                       key="auth_id_input")
-
+            identifier = st.text_input(
+                "📧 Email address",
+                placeholder="you@example.com",
+                key="auth_id_input",
+            )
             if st.button("Send OTP →", type="primary", use_container_width=True):
-                valid, _ = _validate(identifier)
-
+                valid, kind = _validate(identifier)
                 if not valid:
-                    st.error("Enter a valid email or 10-digit mobile number.", icon="❌")
-
+                    st.error("Enter a valid email address.", icon="❌")
+                elif kind == "phone":
+                    st.error("📱 SMS OTP not supported yet. Please use email.", icon="⚠️")
                 else:
                     otp = _otp()
                     store_otp(identifier, otp)
-
-                    # 🔥 EMAIL OTP (NEW)
-                    if "@" in identifier:
-                        success = send_otp_email(identifier, otp)
-                    else:
-                        st.error("📱 SMS OTP not supported yet. Please use email.", icon="⚠️")
-                        success = False
-
+                    success = send_otp_email(identifier.strip(), otp)
                     if success:
-                        st.success("📩 OTP sent to your email!")
-                        st.session_state.auth_identifier = identifier
+                        st.success("📩 OTP sent! Check your inbox (and spam folder).")
+                        st.session_state.auth_identifier = identifier.strip()
                         st.session_state.auth_otp_time   = datetime.datetime.utcnow()
                         st.session_state.auth_stage      = "otp"
                         st.rerun()
-                    else:
-                        st.error("Failed to send OTP. Try again.")
 
-        # ───────────── OTP VERIFY STAGE ─────────────
+        # ── OTP VERIFY STAGE ──
         elif st.session_state.auth_stage == "otp":
             ident = st.session_state.auth_identifier
-
-            st.info(f"OTP sent to **{ident}**")
-
-            otp_in = st.text_input("Enter 6-digit OTP",
-                                  max_chars=6,
-                                  placeholder="······",
-                                  key="otp_in")
-
+            st.info(f"OTP sent to **{ident}** — check spam if not in inbox.")
+            otp_in = st.text_input("Enter 6-digit OTP", max_chars=6,
+                                   placeholder="······", key="otp_in")
             c1, c2 = st.columns(2)
-
             with c1:
                 if st.button("✅ Verify", type="primary", use_container_width=True):
                     if verify_otp(ident, otp_in):
                         uid = get_or_create_user(ident)
-
                         if uid:
                             st.session_state.auth_user_id = uid
                             st.session_state.auth_stage   = "done"
@@ -596,38 +606,40 @@ def render_auth():
                             st.error("Account error. Try again.", icon="❌")
                     else:
                         st.error("Wrong or expired OTP.", icon="❌")
-
             with c2:
                 if st.button("🔄 Resend OTP", use_container_width=True):
                     new_otp = _otp()
                     store_otp(ident, new_otp)
-
-                    # 🔥 RESEND EMAIL
-                    if "@" in ident:
-                        success = send_otp_email(ident, new_otp)
-                        if success:
-                            st.success("📩 New OTP sent!")
-                    else:
-                        st.error("📱 SMS not supported yet.", icon="⚠️")
-
+                    if send_otp_email(ident, new_otp):
+                        st.success("📩 New OTP sent!")
                     st.session_state.auth_otp_time = datetime.datetime.utcnow()
-
-            if st.button("← Change email/phone", use_container_width=True):
+            if st.button("← Change email", use_container_width=True):
                 st.session_state.auth_stage = "input"
                 st.rerun()
 
+        # ── DEBUG expander (remove before going to production) ──
+        with st.expander("🔧 Debug: Test email delivery"):
+            test_addr = st.text_input("Send test OTP to:", key="dbg_email")
+            if st.button("📨 Send Test", key="dbg_send"):
+                if test_addr.strip():
+                    ok = send_otp_email(test_addr.strip(), "999888")
+                    if ok:
+                        st.success(f"Sent! Check {test_addr}. Code: 999888")
+                else:
+                    st.warning("Enter an email address above.")
 
-# ───────────── AUTH GATE ─────────────
+
 if st.session_state.auth_stage != "done":
     render_auth()
     st.stop()
+
 # ════════════════════════════════════════════════════════════════
-# RATE LIMITING — per user_id
+# RATE LIMITING
 # ════════════════════════════════════════════════════════════════
 
 def get_usage():
     try:
-        uid = st.session_state.auth_user_id
+        uid   = st.session_state.auth_user_id
         today = datetime.date.today().isoformat()
         r = sb.table("rate_limits").select("count").eq("user_id", uid).eq("day", today).execute()
         return r.data[0]["count"] if r.data else 0
@@ -635,7 +647,7 @@ def get_usage():
 
 def increment_usage():
     try:
-        uid = st.session_state.auth_user_id
+        uid   = st.session_state.auth_user_id
         today = datetime.date.today().isoformat()
         r = sb.table("rate_limits").select("count").eq("user_id", uid).eq("day", today).execute()
         if r.data:
@@ -685,10 +697,12 @@ def retrieve_chunks(query, class_label, subject, chapter_filter="", top_k=TOP_K)
         for row in (r.data or []):
             sim = float(row.get("similarity", 0))
             if sim > 0.15:
-                out.append({"text":row["content"],"subject":row["subject"],
-                            "chapter":row["chapter"],"page":row.get("page","?"),
-                            "source":row.get("source",""),"class":row["class"],
-                            "relevance":round(sim*100,1)})
+                out.append({
+                    "text":row["content"],"subject":row["subject"],
+                    "chapter":row["chapter"],"page":row.get("page","?"),
+                    "source":row.get("source",""),"class":row["class"],
+                    "relevance":round(sim*100,1),
+                })
         return sorted(out, key=lambda x: x["relevance"], reverse=True)
     except Exception as e:
         st.warning(f"Search error: {e}", icon="⚠️"); return []
@@ -699,21 +713,25 @@ def retrieve_chunks(query, class_label, subject, chapter_filter="", top_k=TOP_K)
 
 def save_note(content, cls, subj, chapter=""):
     try:
-        sb.table("notes").insert({"user_id":st.session_state.auth_user_id,
-            "class":cls,"subject":subj,"chapter":chapter,"content":content}).execute()
+        sb.table("notes").insert({
+            "user_id":st.session_state.auth_user_id,
+            "class":cls,"subject":subj,"chapter":chapter,"content":content,
+        }).execute()
         return True
     except: return False
 
 def get_notes(cls=None):
     try:
-        q = sb.table("notes").select("*").eq("user_id",st.session_state.auth_user_id).order("created_at",desc=True)
+        q = (sb.table("notes").select("*")
+               .eq("user_id", st.session_state.auth_user_id)
+               .order("created_at", desc=True))
         if cls: q = q.eq("class", cls)
         return (q.limit(50).execute()).data or []
     except: return []
 
 def delete_note(nid):
     try:
-        sb.table("notes").delete().eq("id",nid).eq("user_id",st.session_state.auth_user_id).execute()
+        sb.table("notes").delete().eq("id", nid).eq("user_id", st.session_state.auth_user_id).execute()
         return True
     except: return False
 
@@ -730,10 +748,12 @@ def build_ctx(chunks):
 
 def generate_answer(question, chunks, cls, subj, style, history, ch_ctx=None):
     age = {"Class 8":"13–14","Class 9":"14–15","Class 10":"15–16"}.get(cls,"13–16")
-    style_instr = {"Simple":"Simple language, short paragraphs.",
-                   "Detailed":"Comprehensive, cover all sub-topics.",
-                   "Bullets":"Use numbered headings and bullet points.",
-                   "Examples":"Include 2–3 real Indian examples."}.get(style,"Simple language.")
+    style_instr = {
+        "Simple":   "Simple language, short paragraphs.",
+        "Detailed": "Comprehensive, cover all sub-topics.",
+        "Bullets":  "Use numbered headings and bullet points.",
+        "Examples": "Include 2–3 real Indian examples.",
+    }.get(style,"Simple language.")
     ch_line = f"\nStudent studying: {ch_ctx}" if ch_ctx else ""
     system = f"""You are BrainForge — expert CBSE AI tutor for India.
 Read NCERT snippets. Rewrite as clear, structured, student-friendly teaching.
@@ -744,14 +764,18 @@ FORMAT: ## [Topic] / Explanation / **Key Points:** - ... / 💡 Quick Tip: ... /
 End with: 💬 Want examples, a quiz, or deeper explanation?"""
     msgs = [{"role":"system","content":system}]
     for m in history[-(MAX_HISTORY*2):]:
-        if m["role"] in ("user","assistant"): msgs.append({"role":m["role"],"content":m["content"]})
+        if m["role"] in ("user","assistant"):
+            msgs.append({"role":m["role"],"content":m["content"]})
     msgs.append({"role":"user","content":f"Q: {question}\n{build_ctx(chunks)}\nAnswer for {cls} student."})
     try:
-        r = groq_client.chat.completions.create(model=GROQ_MODEL,messages=msgs,temperature=0.4,max_tokens=1400)
+        r = groq_client.chat.completions.create(
+            model=GROQ_MODEL, messages=msgs, temperature=0.4, max_tokens=1400)
         return r.choices[0].message.content.strip()
     except Exception as e:
         err = str(e)
-        return "⚠️ AI rate limit hit. Wait 30 s and retry." if "rate_limit" in err.lower() or "429" in err else f"⚠️ Error: {err}"
+        return ("⚠️ AI rate limit hit. Wait 30 s and retry."
+                if "rate_limit" in err.lower() or "429" in err
+                else f"⚠️ Error: {err}")
 
 def generate_quiz(topic, cls, subj, chunks):
     prompt = f"""CBSE exam setter. Generate ONE MCQ on "{topic}" | {cls} | {subj}
@@ -760,7 +784,10 @@ Reply ONLY valid JSON (no markdown):
 {{"question":"...","options":["A. ...","B. ...","C. ...","D. ..."],"correct":"A","explanation":"..."}}"""
     try:
         r = groq_client.chat.completions.create(
-            model=GROQ_MODEL,messages=[{"role":"user","content":prompt}],temperature=0.3,max_tokens=400)
+            model=GROQ_MODEL,
+            messages=[{"role":"user","content":prompt}],
+            temperature=0.3, max_tokens=400,
+        )
         raw = re.sub(r"```json|```","",r.choices[0].message.content.strip()).strip()
         return json.loads(raw)
     except: return None
@@ -779,27 +806,33 @@ Write chapter overview:
 End: "💬 Ask me anything about this chapter!" """
     try:
         r = groq_client.chat.completions.create(
-            model=GROQ_MODEL,messages=[{"role":"user","content":prompt}],temperature=0.4,max_tokens=800)
+            model=GROQ_MODEL,
+            messages=[{"role":"user","content":prompt}],
+            temperature=0.4, max_tokens=800,
+        )
         return r.choices[0].message.content.strip()
-    except Exception as e: return f"Could not load: {e}"
+    except Exception as e:
+        return f"Could not load chapter overview: {e}"
 
 def is_followup(q, history):
     if not history: return False
     ql = q.lower().strip()
     if len(ql.split()) <= 5:
-        for p in [r"^(what about|tell me more|explain more|can you|how about|give me|more about)",
-                  r"^(example|examples|illustrate|show me)",
-                  r"^(i (don't|do not) understand|unclear|confused|simpler)",
-                  r"^(test me|quiz me|ask me|mcq)"]:
+        for p in [
+            r"^(what about|tell me more|explain more|can you|how about|give me|more about)",
+            r"^(example|examples|illustrate|show me)",
+            r"^(i (don't|do not) understand|unclear|confused|simpler)",
+            r"^(test me|quiz me|ask me|mcq)",
+        ]:
             if re.match(p, ql): return True
     return False
 
 def process_question(question, ch_ctx=None, ch_filter="", ch_subj=None):
     if not rate_limit_check(): return None, []
-    cls_  = st.session_state.selected_class
-    subj_ = ch_subj or st.session_state.selected_subject
-    style = st.session_state.get("answer_depth","Simple")
-    hist  = st.session_state.messages
+    cls_   = st.session_state.selected_class
+    subj_  = ch_subj or st.session_state.selected_subject
+    style  = st.session_state.get("answer_depth","Simple")
+    hist   = st.session_state.messages
     chunks = []
     if not is_followup(question, hist):
         with st.spinner("🔍 Searching NCERT…"):
@@ -824,27 +857,29 @@ with st.sidebar:
     </div>""", unsafe_allow_html=True)
 
     st.markdown("#### 🎓 Class")
-    sel_cls = st.radio("cls",CLASSES,format_func=lambda x:f"{CLASS_ICONS[x]} {x}",
-                       label_visibility="collapsed",key="cls_radio")
+    sel_cls = st.radio("cls", CLASSES,
+                       format_func=lambda x: f"{CLASS_ICONS[x]} {x}",
+                       label_visibility="collapsed", key="cls_radio")
     if sel_cls != st.session_state.selected_class:
-        st.session_state.update(selected_class=sel_cls,selected_chapter=None,
-                                chapter_mode=False,messages=[],quiz_state=None)
+        st.session_state.update(selected_class=sel_cls, selected_chapter=None,
+                                chapter_mode=False, messages=[], quiz_state=None)
 
     st.markdown("#### 📚 Subject")
-    sel_subj = st.radio("subj",SUBJECTS,format_func=lambda x:f"{SUBJECT_ICONS[x]} {x}",
-                        label_visibility="collapsed",key="subj_radio")
+    sel_subj = st.radio("subj", SUBJECTS,
+                        format_func=lambda x: f"{SUBJECT_ICONS[x]} {x}",
+                        label_visibility="collapsed", key="subj_radio")
     if sel_subj != st.session_state.selected_subject:
-        st.session_state.update(selected_subject=sel_subj,selected_chapter=None,
-                                chapter_mode=False,messages=[],quiz_state=None)
+        st.session_state.update(selected_subject=sel_subj, selected_chapter=None,
+                                chapter_mode=False, messages=[], quiz_state=None)
 
     st.markdown("---")
 
-    # Usage meter
     if st.session_state.usage is None: st.session_state.usage = get_usage()
-    used = st.session_state.usage
-    pct  = min(used/DAILY_LIMIT, 1.0)
-    bar_c = "linear-gradient(90deg,#7c3aed,#06b6d4)" if pct<0.8 else "linear-gradient(90deg,#f59e0b,#ef4444)"
-    pill_c = "green" if pct<0.6 else ("warn" if pct<0.9 else "red")
+    used  = st.session_state.usage
+    pct   = min(used / DAILY_LIMIT, 1.0)
+    bar_c = ("linear-gradient(90deg,#7c3aed,#06b6d4)" if pct < 0.8
+             else "linear-gradient(90deg,#f59e0b,#ef4444)")
+    pill_c = "green" if pct < 0.6 else ("warn" if pct < 0.9 else "red")
     st.markdown(f"""
     <div style="margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
@@ -858,20 +893,25 @@ with st.sidebar:
 
     st.markdown("---")
     show_src     = st.toggle("📄 Show NCERT sources", value=False, key="show_src")
-    answer_depth = st.selectbox("Answer style",["Simple","Detailed","Bullets","Examples"],key="answer_depth")
+    answer_depth = st.selectbox("Answer style", ["Simple","Detailed","Bullets","Examples"],
+                                key="answer_depth")
 
-    msgs_count = len([m for m in st.session_state.messages if m["role"]=="user"])
+    msgs_count = len([m for m in st.session_state.messages if m["role"] == "user"])
     if msgs_count:
-        st.markdown(f'<div class="pill green">💬 {msgs_count} question{"s" if msgs_count!=1 else ""}</div>',unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="pill green">💬 {msgs_count} question{"s" if msgs_count!=1 else ""}</div>',
+            unsafe_allow_html=True,
+        )
 
     if st.button("🗑️ Clear Chat", use_container_width=True):
-        st.session_state.update(messages=[],selected_chapter=None,chapter_mode=False,quiz_state=None)
+        st.session_state.update(messages=[], selected_chapter=None,
+                                chapter_mode=False, quiz_state=None)
         st.rerun()
 
     if st.button("🚪 Sign Out", use_container_width=True):
         for k in ["auth_stage","auth_identifier","auth_user_id","auth_otp_time",
                   "messages","usage","quiz_state","selected_chapter"]:
-            st.session_state[k] = {"auth_stage":"input"}.get(k, None)
+            st.session_state[k] = None
         st.session_state.auth_stage = "input"
         st.rerun()
 
@@ -879,9 +919,9 @@ with st.sidebar:
 # HEADER
 # ════════════════════════════════════════════════════════════════
 
-cls  = st.session_state.selected_class
-subj = st.session_state.selected_subject
-c_col = CLASS_COLORS.get(cls,"#7c3aed")
+cls   = st.session_state.selected_class
+subj  = st.session_state.selected_subject
+c_col = CLASS_COLORS.get(cls, "#7c3aed")
 
 st.markdown(f"""
 <div style="background:linear-gradient(135deg,rgba(124,58,237,0.09),rgba(6,182,212,0.04));
@@ -905,14 +945,14 @@ st.markdown(f"""
 
 tab_chat, tab_idx, tab_quiz, tab_notes = st.tabs(["💬 Chat","📖 Chapters","🎯 Quiz","🗒️ Notes"])
 
-# ── Shared renderers ─────────────────────────────────────────
+# ── Shared source renderer ───────────────────────────────────
 
 def render_sources(chunks):
     if not chunks or not st.session_state.get("show_src"): return
     with st.expander(f"📄 {len(chunks)} NCERT passages"):
         for c in chunks:
             rel = c["relevance"]
-            bc  = "#10b981" if rel>=70 else "#f59e0b" if rel>=45 else "#64748b"
+            bc  = "#10b981" if rel >= 70 else "#f59e0b" if rel >= 45 else "#64748b"
             st.markdown(f"""
             <div class="src-card" style="border-left-color:{bc};">
               <div style="display:flex;justify-content:space-between;">
@@ -928,25 +968,6 @@ def render_sources(chunks):
               </div>
             </div>""", unsafe_allow_html=True)
 
-# FIX 1: custom bubble renderer — no Streamlit avatar, no overlap
-def render_msg(role, content):
-    if role == "user":
-        st.markdown(f"""
-        <div class="msg-wrap">
-          <div class="msg-label msg-label-right">You</div>
-          <div style="display:flex;justify-content:flex-end;">
-            <div class="msg-user">{content}</div>
-          </div>
-        </div>""", unsafe_allow_html=True)
-    else:
-        # Convert markdown-ish bold/headers for display inside HTML div
-        html_content = content.replace("**","<strong>",1)
-        # simple pass — Streamlit markdown handles it better, so use st.markdown inside a container
-        st.markdown(f'<div class="msg-label">🧠 BrainForge</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="msg-bot">', unsafe_allow_html=True)
-        st.markdown(content)   # let Streamlit render markdown properly
-        st.markdown('</div>', unsafe_allow_html=True)
-
 # ════════════════════════════════════════════════════════════════
 # TAB 1 — CHAT
 # ════════════════════════════════════════════════════════════════
@@ -961,7 +982,7 @@ with tab_chat:
         ch_title = CHAPTER_INDEX.get(cls,{}).get(ch_s,{}).get(ch_key, ch_key)
         ch_ctx, ch_filter, ch_subj_ = ch_title, ch_key, ch_s
 
-        b1, b2 = st.columns([5,1])
+        b1, b2 = st.columns([5, 1])
         with b1:
             st.markdown(f"""
             <div style="background:rgba(124,58,237,0.08);border:1px solid rgba(124,58,237,0.22);
@@ -972,27 +993,26 @@ with tab_chat:
         with b2:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("✕ Exit", key="exit_ch"):
-                st.session_state.update(chapter_mode=False,selected_chapter=None,messages=[])
+                st.session_state.update(chapter_mode=False, selected_chapter=None, messages=[])
                 st.rerun()
 
-    # Suggestions when chat is empty
     if not st.session_state.messages:
         st.markdown("##### 💡 Try asking:")
         suggs = SUGGESTIONS.get(cls,{}).get(subj, SUGGESTIONS["Class 8"]["Both"])
         c1, c2 = st.columns(2)
         for i, s in enumerate(suggs):
-            with (c1 if i%2==0 else c2):
+            with (c1 if i % 2 == 0 else c2):
                 if st.button(s, key=f"sg{i}"):
                     answer, chunks = process_question(s, ch_ctx, ch_filter, ch_subj_)
                     if answer:
                         st.session_state.messages += [
-                            {"role":"user","content":s,"chunks":[]},
-                            {"role":"assistant","content":answer,"chunks":chunks},
+                            {"role":"user",      "content":s,      "chunks":[]},
+                            {"role":"assistant", "content":answer, "chunks":chunks},
                         ]
                     st.rerun()
         st.markdown("")
 
-    # Render chat history — FIX 1: custom bubbles, no avatar
+    # Render chat history
     for idx, msg in enumerate(st.session_state.messages):
         if msg["role"] == "user":
             st.markdown(f"""
@@ -1006,29 +1026,27 @@ with tab_chat:
             st.markdown('<div class="msg-label">🧠 BrainForge</div>', unsafe_allow_html=True)
             with st.container():
                 st.markdown(
-                    f'<div class="msg-bot-wrap" style="background:rgba(255,255,255,0.035);'
-                    f'border:1px solid rgba(255,255,255,0.08);border-radius:4px 16px 16px 16px;'
-                    f'padding:14px 18px;margin-bottom:4px;">',
-                    unsafe_allow_html=True
+                    '<div style="background:rgba(255,255,255,0.035);'
+                    'border:1px solid rgba(255,255,255,0.08);'
+                    'border-radius:4px 16px 16px 16px;padding:14px 18px;margin-bottom:4px;">',
+                    unsafe_allow_html=True,
                 )
                 st.markdown(msg["content"])
                 st.markdown('</div>', unsafe_allow_html=True)
-            render_sources(msg.get("chunks",[]))
-            # Save note button — clean, outside any chat_message container
-            sv_col, _ = st.columns([1,5])
+            render_sources(msg.get("chunks", []))
+            sv_col, _ = st.columns([1, 5])
             with sv_col:
                 if st.button("🗒️ Save", key=f"sv_{idx}", help="Save as note"):
                     ok = save_note(msg["content"], cls, subj, ch_filter or "General")
                     st.toast("✅ Saved!" if ok else "❌ Could not save.")
 
-    # FIX 2: chat_input placed LAST — CSS pins it to bottom
+    # Chat input — CSS pins it to bottom, left edge respects sidebar
     ph = (f"Ask about {ch_title}…" if ch_ctx else
-          f"Ask anything from {cls} {subj}…" if subj!="Both" else
+          f"Ask anything from {cls} {subj}…" if subj != "Both" else
           f"Ask anything from {cls} Maths or Science…")
 
     question = st.chat_input(ph)
     if question:
-        # Immediately render user bubble
         st.markdown(f"""
         <div class="msg-wrap">
           <div class="msg-label msg-label-right">You</div>
@@ -1042,16 +1060,17 @@ with tab_chat:
             st.markdown('<div class="msg-label">🧠 BrainForge</div>', unsafe_allow_html=True)
             with st.container():
                 st.markdown(
-                    '<div style="background:rgba(255,255,255,0.035);border:1px solid rgba(255,255,255,0.08);'
+                    '<div style="background:rgba(255,255,255,0.035);'
+                    'border:1px solid rgba(255,255,255,0.08);'
                     'border-radius:4px 16px 16px 16px;padding:14px 18px;margin-bottom:4px;">',
-                    unsafe_allow_html=True
+                    unsafe_allow_html=True,
                 )
                 st.markdown(answer)
                 st.markdown('</div>', unsafe_allow_html=True)
             render_sources(chunks)
             st.session_state.messages += [
-                {"role":"user","content":question,"chunks":[]},
-                {"role":"assistant","content":answer,"chunks":chunks},
+                {"role":"user",      "content":question, "chunks":[]},
+                {"role":"assistant", "content":answer,   "chunks":chunks},
             ]
 
 # ════════════════════════════════════════════════════════════════
@@ -1059,7 +1078,7 @@ with tab_chat:
 # ════════════════════════════════════════════════════════════════
 
 with tab_idx:
-    subjs_show = ["Mathematics","Science"] if subj=="Both" else [subj]
+    subjs_show = ["Mathematics","Science"] if subj == "Both" else [subj]
 
     if st.session_state.selected_chapter and not st.session_state.chapter_mode:
         ch_key, ch_s = st.session_state.selected_chapter
@@ -1081,8 +1100,12 @@ with tab_idx:
         st.markdown(summary)
         st.divider()
         if st.button("💬 Chat about this Chapter", use_container_width=True, type="primary"):
-            st.session_state.update(chapter_mode=True, selected_subject=ch_s,
-                messages=[{"role":"assistant","content":f"📖 Ready! Ask anything about **{ch_title}** ({cls}·{ch_s}).","chunks":[]}])
+            st.session_state.update(
+                chapter_mode=True, selected_subject=ch_s,
+                messages=[{"role":"assistant",
+                           "content":f"📖 Ready! Ask anything about **{ch_title}** ({cls}·{ch_s}).",
+                           "chunks":[]}],
+            )
             st.rerun()
     else:
         for s in subjs_show:
@@ -1090,10 +1113,10 @@ with tab_idx:
             if not chapters: continue
             st.markdown(f"#### {SUBJECT_ICONS.get(s,'')} {cls} — {s}")
             for ch_key, ch_title in chapters.items():
-                parts = ch_title.split(" — ",1)
-                ch_num = parts[0] if len(parts)>1 else ""
-                ch_nm  = parts[1] if len(parts)>1 else ch_title
-                a, b = st.columns([6,1])
+                parts  = ch_title.split(" — ", 1)
+                ch_num = parts[0] if len(parts) > 1 else ""
+                ch_nm  = parts[1] if len(parts) > 1 else ch_title
+                a, b = st.columns([6, 1])
                 with a:
                     st.markdown(f"""
                     <div class="bf-card">
@@ -1103,7 +1126,7 @@ with tab_idx:
                 with b:
                     st.markdown("<br><br>", unsafe_allow_html=True)
                     if st.button("Open", key=f"ch_{cls}_{s}_{ch_key}"):
-                        st.session_state.selected_chapter = (ch_key,s); st.rerun()
+                        st.session_state.selected_chapter = (ch_key, s); st.rerun()
             st.markdown("")
 
 # ════════════════════════════════════════════════════════════════
@@ -1113,28 +1136,30 @@ with tab_idx:
 with tab_quiz:
     st.markdown("#### 🎯 Quick Quiz")
     st.caption("AI-generated MCQs from NCERT content")
-    quiz_topic = st.text_input("Topic",placeholder="e.g. Photosynthesis, Newton's Laws, Trigonometry…",key="qtopic")
-    g1,_ = st.columns([1,2])
+    quiz_topic = st.text_input("Topic",
+                               placeholder="e.g. Photosynthesis, Newton's Laws, Trigonometry…",
+                               key="qtopic")
+    g1, _ = st.columns([1, 2])
     with g1:
-        gen_btn = st.button("⚡ Generate Question",use_container_width=True,type="primary")
+        gen_btn = st.button("⚡ Generate Question", use_container_width=True, type="primary")
 
     if gen_btn:
         if not quiz_topic.strip():
-            st.warning("Enter a topic first.",icon="⚠️")
+            st.warning("Enter a topic first.", icon="⚠️")
         elif rate_limit_check():
             with st.spinner("Generating MCQ from NCERT…"):
-                chunks = retrieve_chunks(quiz_topic,cls,subj,"",top_k=4)
-                q_data = generate_quiz(quiz_topic,cls,subj,chunks)
+                chunks = retrieve_chunks(quiz_topic, cls, subj, "", top_k=4)
+                q_data = generate_quiz(quiz_topic, cls, subj, chunks)
             if q_data:
                 st.session_state.quiz_state    = q_data
                 st.session_state.quiz_answered = False
                 st.session_state.usage = increment_usage()
             else:
-                st.error("Could not generate quiz. Try a more specific topic.",icon="❌")
+                st.error("Could not generate quiz. Try a more specific topic.", icon="❌")
 
     if st.session_state.quiz_state:
-        q = st.session_state.quiz_state
-        answered = st.session_state.quiz_answered
+        q            = st.session_state.quiz_state
+        answered     = st.session_state.quiz_answered
         correct_letter = q.get("correct","A").upper()
         st.markdown(f"""
         <div class="bf-card" style="border-color:rgba(124,58,237,0.38);margin-top:10px;">
@@ -1147,29 +1172,34 @@ with tab_quiz:
         for opt in q["options"]:
             letter = opt[0].upper()
             if not answered:
-                if st.button(opt,key=f"opt_{letter}",use_container_width=True):
-                    st.session_state.quiz_answered=True; st.session_state.quiz_last_pick=letter; st.rerun()
+                if st.button(opt, key=f"opt_{letter}", use_container_width=True):
+                    st.session_state.quiz_answered = True
+                    st.session_state.quiz_last_pick = letter
+                    st.rerun()
             else:
                 chosen = st.session_state.get("quiz_last_pick","")
-                sty = "correct" if letter==correct_letter else ("incorrect" if letter==chosen else "")
-                ico = "✅" if letter==correct_letter else ("❌" if letter==chosen else "")
-                st.markdown(f'<div class="quiz-opt {sty}">{ico} {opt}</div>',unsafe_allow_html=True)
+                sty = "correct" if letter == correct_letter else ("incorrect" if letter == chosen else "")
+                ico = "✅" if letter == correct_letter else ("❌" if letter == chosen else "")
+                st.markdown(f'<div class="quiz-opt {sty}">{ico} {opt}</div>', unsafe_allow_html=True)
 
         if answered:
             chosen = st.session_state.get("quiz_last_pick","")
-            if chosen==correct_letter: st.success("🎉 Correct! Well done.")
+            if chosen == correct_letter: st.success("🎉 Correct! Well done.")
             else: st.error(f"The correct answer is **{correct_letter}**.")
             st.markdown(f"""
             <div style="background:rgba(6,182,212,0.06);border:1px solid rgba(6,182,212,0.18);
                  border-radius:10px;padding:11px 15px;margin-top:8px;font-size:0.82rem;color:#cbd5e1;">
               💡 <strong>Explanation:</strong> {q.get('explanation','')}
             </div>""", unsafe_allow_html=True)
-            n1,n2 = st.columns(2)
+            n1, n2 = st.columns(2)
             with n1:
-                if st.button("🔄 New Question",use_container_width=True):
-                    st.session_state.quiz_state=None; st.session_state.quiz_answered=False; st.rerun()
+                if st.button("🔄 New Question", use_container_width=True):
+                    st.session_state.quiz_state    = None
+                    st.session_state.quiz_answered = False
+                    st.rerun()
             with n2:
-                if st.button("💬 Discuss this topic",use_container_width=True): st.rerun()
+                if st.button("💬 Discuss this topic", use_container_width=True):
+                    st.rerun()
 
 # ════════════════════════════════════════════════════════════════
 # TAB 4 — NOTES
@@ -1178,13 +1208,16 @@ with tab_quiz:
 with tab_notes:
     st.markdown("#### 🗒️ Saved Notes")
     with st.expander("✏️ Add a custom note"):
-        note_txt = st.text_area("Your note",placeholder="Write something to remember…",height=90,key="new_note")
-        if st.button("💾 Save Note",use_container_width=True):
+        note_txt = st.text_area("Your note",
+                                placeholder="Write something to remember…",
+                                height=90, key="new_note")
+        if st.button("💾 Save Note", use_container_width=True):
             if note_txt.strip():
-                ok = save_note(note_txt.strip(),cls,subj,"Manual")
-                st.toast("✅ Saved!" if ok else "❌ Could not save.",icon="🗒️")
+                ok = save_note(note_txt.strip(), cls, subj, "Manual")
+                st.toast("✅ Saved!" if ok else "❌ Could not save.", icon="🗒️")
                 if ok: st.rerun()
-            else: st.warning("Note is empty.",icon="⚠️")
+            else:
+                st.warning("Note is empty.", icon="⚠️")
     st.markdown("---")
 
     notes = get_notes(cls)
@@ -1197,12 +1230,12 @@ with tab_notes:
         </div>""", unsafe_allow_html=True)
     else:
         for note in notes:
-            ts  = note.get("created_at","")[:16].replace("T"," ")
-            ch  = note.get("chapter","")
-            txt = note.get("content","")
-            nid = note.get("id")
-            display = txt[:400]+("…" if len(txt)>400 else "")
-            na,nb = st.columns([8,1])
+            ts      = note.get("created_at","")[:16].replace("T"," ")
+            ch      = note.get("chapter","")
+            txt     = note.get("content","")
+            nid     = note.get("id")
+            display = txt[:400] + ("…" if len(txt) > 400 else "")
+            na, nb  = st.columns([8, 1])
             with na:
                 st.markdown(f"""
                 <div class="note-card">
@@ -1215,5 +1248,5 @@ with tab_notes:
                   <div class="note-body">{display}</div>
                 </div>""", unsafe_allow_html=True)
             with nb:
-                if st.button("🗑️",key=f"del_{nid}",help="Delete"):
+                if st.button("🗑️", key=f"del_{nid}", help="Delete"):
                     delete_note(nid); st.rerun()
