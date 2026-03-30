@@ -167,10 +167,14 @@ st.markdown("""
   --accent:#7c3aed;
   --text:#e2e8f0;
   --muted:#64748b;
+  --success:#10b981;
+  --warn:#f59e0b;
+  --danger:#ef4444;
   --radius:14px;
   --font:'Space Grotesk',sans-serif;
 }
 
+/* ───────── BASE ───────── */
 html, body, .stApp {
   background: var(--bg) !important;
   color: var(--text) !important;
@@ -178,6 +182,22 @@ html, body, .stApp {
 }
 
 #MainMenu, footer { visibility:hidden; }
+
+/* ───────── HEADER (FIXED) ───────── */
+header[data-testid="stHeader"] {
+  background: transparent !important;
+  border-bottom: none !important;
+}
+
+/* Sidebar toggle ALWAYS visible */
+button[data-testid="collapsedControl"] {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  background: rgba(124,58,237,0.2) !important;
+  border-radius: 8px !important;
+  color: #a78bfa !important;
+}
 
 /* ───────── SIDEBAR ───────── */
 section[data-testid="stSidebar"] {
@@ -191,17 +211,23 @@ section[data-testid="stSidebar"] * {
 
 /* ───────── MAIN LAYOUT ───────── */
 .block-container {
-  padding:1rem 1.5rem 110px 1.5rem !important;
-  max-width:100% !important;
+  padding: 1rem 1.5rem 110px 1.5rem !important;
+  max-width: 100% !important;
 }
 
 /* ───────── BUTTONS ───────── */
 .stButton > button {
   background: var(--accent) !important;
   color:#fff !important;
+  border:none !important;
   border-radius:10px !important;
   font-weight:700 !important;
   font-size:0.85rem !important;
+  padding:0.5rem 1rem !important;
+}
+
+.stButton > button:hover {
+  background:#6d28d9 !important;
 }
 
 /* ───────── INPUTS ───────── */
@@ -209,58 +235,115 @@ section[data-testid="stSidebar"] * {
 textarea {
   background:var(--surface) !important;
   border:1px solid var(--border) !important;
+  border-radius:10px !important;
   color:var(--text) !important;
 }
 
-/* ───────── CHAT UI ───────── */
+textarea:focus,
+.stTextInput input:focus {
+  border-color:var(--accent) !important;
+}
+
+/* ───────── CHAT MESSAGES ───────── */
+div[data-testid="stChatMessage"] {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* USER */
 .msg-user {
+  align-self:flex-end;
   background:rgba(124,58,237,0.2);
   border-radius:16px;
-  padding:10px;
+  padding:10px 14px;
+  max-width:80%;
 }
 
+/* BOT */
 .msg-bot {
+  align-self:flex-start;
   background:rgba(255,255,255,0.04);
   border-radius:16px;
-  padding:12px;
+  padding:12px 16px;
+  max-width:90%;
 }
 
-/* 🚀 FIXED CHAT INPUT (MAIN ISSUE SOLVED) */
+/* ───────── CHAT INPUT (FIXED PROPERLY) ───────── */
 div[data-testid="stChatInput"] {
   position: sticky !important;
   bottom: 0 !important;
   z-index: 10 !important;
   background: linear-gradient(to top, #06070f 70%, transparent) !important;
-  padding: 12px 20px !important;
+  padding: 14px 20px !important;
 }
 
-/* textarea inside chat */
+/* TEXTAREA */
 div[data-testid="stChatInput"] textarea {
   background:#0d1117 !important;
   border:1px solid rgba(124,58,237,0.4) !important;
   border-radius:12px !important;
   color:var(--text) !important;
-}
-
-/* 🔥 REMOVE TOP WHITE HEADER */
-header[data-testid="stHeader"] {
-  background: transparent !important;
-  height: 0px !important;
-  visibility: hidden !important;
-}
-
-/* also remove extra top padding */
-.block-container {
-  padding-top: 0rem !important;
+  font-size:0.9rem !important;
+  padding:12px !important;
 }
 
 /* ───────── TABS ───────── */
+.stTabs [data-baseweb="tab-list"] {
+  background:var(--surface) !important;
+  border-radius:10px !important;
+  padding:4px !important;
+}
+
 .stTabs [data-baseweb="tab"] {
   color:var(--muted) !important;
+  font-weight:600 !important;
 }
+
 .stTabs [aria-selected="true"] {
   background:var(--accent) !important;
   color:#fff !important;
+}
+
+/* ───────── RADIO ───────── */
+.stRadio label {
+  background:rgba(255,255,255,0.03) !important;
+  border:1px solid var(--border) !important;
+  border-radius:8px !important;
+  padding:6px 10px !important;
+}
+
+/* ───────── CARDS ───────── */
+.bf-card {
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:14px;
+}
+
+/* ───────── NOTES ───────── */
+.note-card {
+  background:rgba(6,182,212,0.05);
+  border:1px solid rgba(6,182,212,0.2);
+  border-radius:12px;
+  padding:12px;
+}
+
+/* ───────── QUIZ ───────── */
+.quiz-opt {
+  background:rgba(255,255,255,0.04);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:10px;
+}
+
+.quiz-opt.correct {
+  border-color:var(--success) !important;
+  background:rgba(16,185,129,0.1);
+}
+
+.quiz-opt.incorrect {
+  border-color:var(--danger) !important;
+  background:rgba(239,68,68,0.1);
 }
 
 /* ───────── MOBILE ───────── */
@@ -270,7 +353,7 @@ header[data-testid="stHeader"] {
   }
 }
 
-/* scrollbar */
+/* ───────── SCROLLBAR ───────── */
 ::-webkit-scrollbar { width:4px; }
 ::-webkit-scrollbar-thumb {
   background:rgba(124,58,237,0.4);
