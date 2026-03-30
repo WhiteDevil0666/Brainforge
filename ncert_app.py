@@ -242,6 +242,18 @@ div[data-testid="stChatInput"] textarea {
   color:var(--text) !important;
 }
 
+/* 🔥 REMOVE TOP WHITE HEADER */
+header[data-testid="stHeader"] {
+  background: transparent !important;
+  height: 0px !important;
+  visibility: hidden !important;
+}
+
+/* also remove extra top padding */
+.block-container {
+  padding-top: 0rem !important;
+}
+
 /* ───────── TABS ───────── */
 .stTabs [data-baseweb="tab"] {
   color:var(--muted) !important;
